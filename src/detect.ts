@@ -1,6 +1,6 @@
 // Minimal session detection for Claude Code.
 // Sessions live as JSONL under ~/.claude/projects/<project>/.
-// We read only the metadata we need — never prompt or output text.
+// We read only the metadata we need, never prompt or output text.
 
 import { readdir, readFile } from "node:fs/promises";
 import { homedir } from "node:os";
