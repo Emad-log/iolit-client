@@ -1,18 +1,23 @@
 #!/usr/bin/env node
-// Iolit CLI v1: detect -> preview -> approve -> send.
-// The preview screen is the product: nothing leaves without a yes.
+// Iolit CLI: detect -> preview -> approve -> send, plus `iolit history`.
 
 import { findClaudeSessions } from "./detect.js";
 import { findCursorSessions } from "./detect-cursor.js";
+import { findCodexSessions } from "./detect-codex.js";
 import { buildPayload, hasSessions } from "./payload.js";
 import { send } from "./send.js";
+import { recordSent, readHistory } from "./history.js";
 import { createInterface } from "node:readline/promises";
 import { stdin, stdout } from "node:process";
 
 const RATE_PER_MILLION_TOKENS = 3;
 
-async function main() {
-  const sessions = [...(await findClaudeSessions()), ...findCursorSessions()];
+async function collectSessions() {
+  return [...(await findClaudeSessions()), ...findCursorSessions(), ...findCodexSessions()];
+}
+
+async function submit() {
+  const sessions = await collectSessions();
   const payload = buildPayload(sessions);
 
   if (!hasSessions(payload)) {
@@ -45,10 +50,46 @@ async function main() {
   }
 
   const ok = await send(payload);
-  console.log(ok ? "  Sent." : "  Failed to send.");
+  if (ok) {
+    recordSent({
+      batchId: payload.batchId,
+      sentAt: new Date().toISOString(),
+      sessions: sessions.length,
+      sizeKb: kb,
+      estUsd: est,
+    });
+    console.log("  Sent.");
+  } else {
+    console.log("  Failed to send.");
+  }
 }
 
-main().catch((err) => {
-  console.error("Error:", err.message);
-  process.exit(1);
-});
+function history() {
+  const entries = readHistory();
+  if (entries.length === 0) {
+    console.log("No batches sent yet.");
+    return;
+  }
+  console.log("");
+  console.log(`  Batches sent: ${entries.length}`);
+  console.log("  " + "-".repeat(36));
+  let totalUsd = 0;
+  for (const e of entries) {
+    totalUsd += e.estUsd;
+    console.log(
+      `  ${e.sentAt.slice(0, 16).replace("T", " ")}  ${e.batchId}  ${e.sessions} sessions  ~${e.sizeKb} KB  est $${e.estUsd.toFixed(2)}`
+    );
+  }
+  console.log("  " + "-".repeat(36));
+  console.log(`  Total est: $${totalUsd.toFixed(2)} (unverified)`);
+}
+
+const cmd = process.argv[2];
+if (cmd === "history") {
+  history();
+} else {
+  submit().catch((err) => {
+    console.error("Error:", err.message);
+    process.exit(1);
+  });
+}

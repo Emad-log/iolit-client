@@ -2,7 +2,7 @@
 // If a field isn't here, the client never sends it.
 
 export interface SessionMeta {
-  tool: "claude" | "cursor";
+  tool: "claude" | "cursor" | "codex";
   model: string;
   startedAt: string; // ISO
   durationSec: number;
