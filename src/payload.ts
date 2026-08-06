@@ -1,6 +1,6 @@
 // THE AUDITED MODULE.
 // Pure function: session metadata in, JSON payload out.
-// No IO, no side effects. This is the entire trust surface —
+// No IO, no side effects. This is the entire trust surface.
 // unit tests here are exhaustive, and this is all the README points at.
 
 import type { BatchPayload, SessionMeta } from "./types.js";
