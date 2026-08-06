@@ -8,7 +8,7 @@
   },
   "scripts": {
     "build": "tsc",
-    "test": "node --test dist/test/payload.test.js dist/test/cursor.test.js",
+    "test": "node --test dist/test/payload.test.js dist/test/cursor.test.js dist/test/codex.test.js dist/test/history.test.js",
     "check:single-send": "node scripts/check-network.js"
   },
   "engines": {
