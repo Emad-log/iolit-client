@@ -1,6 +1,4 @@
-// THE ONLY NETWORK CALL IN THE CLIENT.
-// Grep the repo for fetch/axios/http, this is the single hit.
-// The CI check (scripts/check-network.js) fails the build if another appears.
+// The only network call in the client. CI enforces single call site (scripts/check-network.js).
 
 const DEFAULT_ENDPOINT = "https://iolit.dev/api/v1/batches";
 

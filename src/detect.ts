@@ -1,6 +1,4 @@
-// Minimal session detection for Claude Code.
-// Sessions live as JSONL under ~/.claude/projects/<project>/.
-// We read only the metadata we need, never prompt or output text.
+// Claude sessions: JSONL under ~/.claude/projects/<project>/. Reads metadata only.
 
 import { readdir, readFile } from "node:fs/promises";
 import { homedir } from "node:os";
@@ -16,7 +14,7 @@ export async function findClaudeSessions(limit = 20): Promise<SessionMeta[]> {
     if (sessions.length >= limit) break;
     const files = await readdir(join(dir, project)).catch(() => [] as string[]);
     // newest first
-    files.sort().reverse();
+    (files as string[]).sort().reverse();
     for (const file of files) {
       if (sessions.length >= limit) break;
       const meta = await readSessionFile(join(dir, project, file));
@@ -62,7 +60,7 @@ async function readSessionFile(path: string): Promise<SessionMeta | null> {
     tokensOut,
     taskType: "unknown",
     success,
-    toolsUsed: [...toolsUsed],
+    toolsUsed: Array.from(toolsUsed),
     hourOfDay: new Date().getHours(),
   };
 }

@@ -1,5 +1,4 @@
 // Local ledger of sent batches. Append-only JSONL under ~/.iolit/.
-// Powers `iolit history`; also the receipts a seller can check against the API.
 
 import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";

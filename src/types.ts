@@ -1,5 +1,4 @@
-// The complete, public payload schema.
-// If a field isn't here, the client never sends it.
+// Public payload schema. If a field isn't here, the client never sends it.
 
 export interface SessionMeta {
   tool: "claude" | "cursor" | "codex";
