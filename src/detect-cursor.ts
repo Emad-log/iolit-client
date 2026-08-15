@@ -1,45 +1,86 @@
-// Cursor sessions: SQLite state.vscdb under workspaceStorage. Reads metadata only.
+// Cursor sessions: SQLite state.vscdb. Structured fields only.
 
-import { readdirSync, existsSync } from "node:fs";
+import { readdirSync, existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import type { SessionMeta } from "./types.js";
+import {
+  applyToolMap,
+  bumpTool,
+  classifyBranch,
+  emptySession,
+  extHint,
+  finishSession,
+  shortHash,
+} from "./meta.js";
+import type { SessionMeta, ToolCallStat } from "./types.js";
 
-const CONVERSATION_KEYS = ["cursor-composer.conversations", "cursor-conversations", "conversations"];
+const CONVERSATION_KEYS = [
+  "cursor-composer.conversations",
+  "cursor-conversations",
+  "conversations",
+  "aiService.prompts",
+];
 
 export function findCursorSessions(limit = 20): SessionMeta[] {
   const dirs = [
-    join(homedir(), "Library", "Application Support", "Cursor", "User", "workspaceStorage"), // macOS
-    join(homedir(), ".config", "Cursor", "User", "workspaceStorage"), // linux
+    join(homedir(), "Library", "Application Support", "Cursor", "User", "workspaceStorage"),
+    join(homedir(), ".config", "Cursor", "User", "workspaceStorage"),
+    join(homedir(), "Library", "Application Support", "Cursor", "User", "globalStorage"),
+    join(homedir(), ".config", "Cursor", "User", "globalStorage"),
   ];
 
   const sessions: SessionMeta[] = [];
   for (const dir of dirs) {
     if (!existsSync(dir)) continue;
-    for (const workspace of readdirSync(dir)) {
-      if (sessions.length >= limit) break;
-      const dbPath = join(dir, workspace, "state.vscdb");
-      if (!existsSync(dbPath)) continue;
+    const dbPath = join(dir, "state.vscdb");
+    if (existsSync(dbPath)) {
       sessions.push(...readConversations(dbPath, limit - sessions.length));
     }
+    try {
+      for (const workspace of readdirSync(dir)) {
+        if (sessions.length >= limit) break;
+        const nested = join(dir, workspace, "state.vscdb");
+        if (existsSync(nested)) {
+          sessions.push(...readConversations(nested, limit - sessions.length));
+        }
+      }
+    } catch {
+      // not a directory listing we can walk
+    }
   }
-  return sessions;
+  return sessions.slice(0, limit);
 }
 
 export function readConversations(dbPath: string, limit: number): SessionMeta[] {
   let db: DatabaseSync | undefined;
   try {
     db = new DatabaseSync(dbPath, { readOnly: true });
-    const rows = db
-      .prepare("SELECT key, value FROM ItemTable WHERE key IN (?, ?, ?)")
-      .all(...CONVERSATION_KEYS) as { key: string; value: string }[];
-
     const out: SessionMeta[] = [];
-    for (const row of rows) {
-      for (const conv of parseConversations(row.value)) {
-        if (out.length >= limit) break;
+    const cwdHint = workspaceCwd(dbPath);
+
+    const named = db
+      .prepare(`SELECT key, value FROM ItemTable WHERE key IN (${CONVERSATION_KEYS.map(() => "?").join(",")})`)
+      .all(...CONVERSATION_KEYS) as { key: string; value: string }[];
+    for (const row of named) {
+      for (const conv of parseConversations(row.value, cwdHint)) {
+        if (out.length >= limit) return out;
         out.push(conv);
+      }
+    }
+
+    if (out.length < limit) {
+      try {
+        const kv = db
+          .prepare("SELECT key, value FROM cursorDiskKV WHERE key LIKE 'composerData:%' LIMIT 40")
+          .all() as { key: string; value: string }[];
+        for (const row of kv) {
+          if (out.length >= limit) break;
+          const parsed = parseComposerDoc(row.value, cwdHint);
+          if (parsed) out.push(parsed);
+        }
+      } catch {
+        // older dbs have no cursorDiskKV
       }
     }
     return out;
@@ -50,7 +91,17 @@ export function readConversations(dbPath: string, limit: number): SessionMeta[] 
   }
 }
 
-function parseConversations(raw: string): SessionMeta[] {
+function workspaceCwd(dbPath: string): string {
+  try {
+    const raw = readFileSync(join(dirname(dbPath), "workspace.json"), "utf8");
+    const data = JSON.parse(raw) as { folder?: string };
+    return typeof data.folder === "string" ? data.folder : "";
+  } catch {
+    return "";
+  }
+}
+
+function parseConversations(raw: string, cwdHint: string): SessionMeta[] {
   try {
     const data = JSON.parse(raw) as Record<string, unknown>;
     const list: unknown[] = Array.isArray(data)
@@ -59,19 +110,148 @@ function parseConversations(raw: string): SessionMeta[] {
     return list
       .filter((c): c is Record<string, unknown> => typeof c === "object" && c !== null)
       .slice(0, 20)
-      .map((c) => ({
-        tool: "cursor" as const,
-        model: typeof c.model === "string" ? c.model : "unknown",
-        startedAt: typeof c.timestamp === "string" ? c.timestamp : new Date().toISOString(),
-        durationSec: 0,
-        tokensIn: 0,
-        tokensOut: 0,
-        taskType: "unknown",
-        success: true,
-        toolsUsed: [],
-        hourOfDay: new Date().getHours(),
-      }));
+      .map((c) => mapConversation(c, cwdHint));
   } catch {
     return [];
   }
+}
+
+function parseComposerDoc(raw: string, cwdHint: string): SessionMeta | null {
+  try {
+    const data = JSON.parse(raw) as Record<string, unknown>;
+    return mapConversation(data, cwdHint);
+  } catch {
+    return null;
+  }
+}
+
+function mapConversation(c: Record<string, unknown>, cwdHint: string): SessionMeta {
+  const s = emptySession("cursor");
+  const models = new Set<string>();
+  const langs = new Set<string>();
+  const calls = new Map<string, ToolCallStat>();
+  const seq: string[] = [];
+
+  const model =
+    pickString(c, ["model", "modelName"]) ||
+    pickString(asRecord(c.modelConfig), ["modelName", "model"]) ||
+    pickString(asRecord(c.modelInfo), ["modelName", "model"]);
+  if (model) {
+    s.model = model;
+    models.add(model);
+  }
+
+  const started = pickString(c, ["timestamp", "createdAt", "created_at"]);
+  const ended = pickString(c, ["lastUpdatedAt", "updatedAt", "endedAt"]);
+  if (started) s.startedAt = started;
+  if (ended) s.endedAt = ended;
+
+  const git = asRecord(c.gitWorktree);
+  if (git) {
+    s.hasGit = true;
+    const branch = pickString(git, ["branchName", "branch"]);
+    if (branch) s.branchClass = classifyBranch(branch);
+    const path = pickString(git, ["worktreePath", "path"]);
+    if (path) s.cwdHash = shortHash(path);
+  }
+  if (!s.cwdHash && cwdHint) s.cwdHash = shortHash(cwdHint);
+  if (c.isSubagent === true) s.isSubagent = true;
+
+  const bubbles = firstArray(c, ["bubbles", "messages", "conversation", "fullConversationHeadersOnly"]);
+  for (const item of bubbles) {
+    const b = asRecord(item);
+    if (!b) continue;
+    const role = (pickString(b, ["type", "role", "bubbleType"]) || "").toLowerCase();
+    if (role.includes("user") || role === "human") s.userTurns += 1;
+    if (role.includes("assistant") || role.includes("ai") || role === "bot") s.assistantTurns += 1;
+    const bubbleModel =
+      pickString(b, ["model", "modelName"]) ||
+      pickString(asRecord(b.modelInfo), ["modelName", "model"]);
+    if (bubbleModel) models.add(bubbleModel);
+    const text = pickString(b, ["text", "content", "richText"]);
+    if (text && (role.includes("user") || role === "human")) s.userCharsIn += text.length;
+    if (text && (role.includes("assistant") || role.includes("ai"))) s.textCharsOut += text.length;
+    collectTools(b, langs, calls, seq);
+    noteUsage(s, b);
+  }
+
+  collectTools(c, langs, calls, seq);
+  noteUsage(s, c);
+  if (models.size > 0) {
+    s.modelsUsed = Array.from(models);
+    if (s.model === "unknown") s.model = s.modelsUsed[0] ?? "unknown";
+  }
+  if (s.userTurns === 0 && s.assistantTurns === 0 && bubbles.length === 0) {
+    s.userTurns = 1;
+    s.assistantTurns = 1;
+  }
+  applyToolMap(s, calls);
+  s.success = s.assistantTurns > 0 || s.toolCallCount > 0 || s.model !== "unknown";
+  return finishSession(s, seq, langs);
+}
+
+function collectTools(
+  rec: Record<string, unknown>,
+  langs: Set<string>,
+  calls: Map<string, ToolCallStat>,
+  seq: string[],
+): void {
+  const lists = [
+    rec.toolCalls,
+    rec.tool_calls,
+    rec.tools,
+    rec.actions,
+    asRecord(rec.capabilityType) ? [rec] : null,
+  ];
+  for (const list of lists) {
+    if (!Array.isArray(list)) continue;
+    for (const item of list) {
+      const t = asRecord(item);
+      if (!t) continue;
+      const name = pickString(t, ["name", "toolName", "tool", "type", "capabilityType"]);
+      if (!name) continue;
+      bumpTool(calls, name, Boolean(t.isError || t.error));
+      seq.push(name);
+      const input = asRecord(t.params) ?? asRecord(t.input) ?? asRecord(t.args);
+      if (input) {
+        for (const v of Object.values(input)) {
+          if (typeof v === "string") {
+            const ext = extHint(v);
+            if (ext) langs.add(ext);
+          }
+        }
+      }
+    }
+  }
+}
+
+function noteUsage(s: SessionMeta, rec: Record<string, unknown>): void {
+  const usage = asRecord(rec.usage) ?? asRecord(rec.tokenUsage) ?? rec;
+  s.tokensIn += num(usage?.input_tokens ?? usage?.promptTokens ?? usage?.prompt_tokens);
+  s.tokensOut += num(usage?.output_tokens ?? usage?.completionTokens ?? usage?.completion_tokens);
+}
+
+function firstArray(rec: Record<string, unknown>, keys: string[]): unknown[] {
+  for (const k of keys) {
+    const v = rec[k];
+    if (Array.isArray(v)) return v;
+  }
+  return [];
+}
+
+function pickString(rec: Record<string, unknown> | null, keys: string[]): string {
+  if (!rec) return "";
+  for (const k of keys) {
+    const v = rec[k];
+    if (typeof v === "string" && v) return v;
+  }
+  return "";
+}
+
+function asRecord(v: unknown): Record<string, unknown> | null {
+  return typeof v === "object" && v !== null && !Array.isArray(v) ? (v as Record<string, unknown>) : null;
+}
+
+function num(v: unknown): number {
+  return typeof v === "number" && Number.isFinite(v) ? v : 0;
 }

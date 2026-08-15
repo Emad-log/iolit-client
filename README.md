@@ -39,11 +39,18 @@ node dist/cli.js
 Metadata only. The full schema is `src/types.ts`:
 
 ```
-tool, model, startedAt, durationSec, tokensIn, tokensOut,
-taskType, success, toolsUsed, hourOfDay
+tool, model, modelsUsed, startedAt, endedAt, durationSec, hourOfDay, dayOfWeek,
+cliVersion, userTurns, assistantTurns, tokensIn, tokensOut,
+cacheCreationTokens, cacheReadTokens, cacheHitRatio,
+webSearchRequests, webFetchRequests, serviceTier, speed,
+taskType, success, lastStopReason, apiErrorCount,
+toolErrorCount, toolCallCount, toolsUsed, toolCalls, toolSequence,
+thinkingBlocks, thinkingChars, textCharsOut, userCharsIn,
+isSubagent, cwdHash, hasGit, branchClass, langHints,
+permissionMode, stopReasons
 ```
 
-No prompts. No code. No file paths. Nothing else exists in the payload, and
+No prompts. No code. No file paths. Paths are hashed. Nothing else exists in the payload, and
 the schema test enforces it.
 
 ## Build & test

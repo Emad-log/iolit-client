@@ -4,6 +4,7 @@
 import { findClaudeSessions } from "./detect.js";
 import { findCursorSessions } from "./detect-cursor.js";
 import { findCodexSessions } from "./detect-codex.js";
+import { findCopilotSessions } from "./detect-copilot.js";
 import { buildPayload, hasSessions } from "./payload.js";
 import { send } from "./send.js";
 import { recordSent, readHistory } from "./history.js";
@@ -13,7 +14,12 @@ import { stdin, stdout } from "node:process";
 const RATE_PER_MILLION_TOKENS = 3;
 
 async function collectSessions() {
-  return [...(await findClaudeSessions()), ...findCursorSessions(), ...findCodexSessions()];
+  return [
+    ...(await findClaudeSessions()),
+    ...findCursorSessions(),
+    ...findCodexSessions(),
+    ...findCopilotSessions(),
+  ];
 }
 
 async function submit() {
@@ -37,7 +43,9 @@ async function submit() {
   console.log(`  Models:    ${[...new Set(sessions.map((s) => s.model))].join(", ")}`);
   console.log(`  Size:      ~${kb} KB`);
   console.log(`  Estimate:  $${est.toFixed(2)} (unverified, buyers set real price)`);
-  console.log("  Content:   metadata only, no prompts, no code, no paths");
+  const types = [...new Set(sessions.map((s) => s.taskType))].join(", ");
+  console.log(`  Task types: ${types}`);
+  console.log("  Content:   structured metadata only, no prompts, no code, no paths");
   console.log("");
 
   const rl = createInterface({ input: stdin, output: stdout });
