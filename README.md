@@ -29,7 +29,7 @@ node dist/cli.js
 
 ## How it works
 
-1. `iolit` reads local Claude, Cursor, Codex, and Copilot history
+1. `iolit` reads local Claude, Cursor, and Codex history
 2. It shows three share tiers and an estimate for each
 3. You pick pulse, trace, or raw, then approve. Only then is it sent
 4. `iolit history` shows every batch you've sent
