@@ -10,7 +10,8 @@ import {
   extHint,
   finishSession,
 } from "./meta.js";
-import type { SessionMeta, ToolCallStat } from "./types.js";
+import { EVENT_CAP, parseExitCode, preview, resultText, summarizeInput } from "./redact.js";
+import type { SessionMeta, ToolCallStat, ToolEvent } from "./types.js";
 
 const SESSIONS_DIR = join(homedir(), ".codex", "sessions");
 
@@ -58,6 +59,9 @@ export function parseSessionFile(path: string): SessionMeta | null {
   const langs = new Set<string>();
   const calls = new Map<string, ToolCallStat>();
   const seq: string[] = [];
+  const events: ToolEvent[] = [];
+  const userParts: string[] = [];
+  const asstParts: string[] = [];
   let hasMessage = false;
 
   for (const line of raw.split("\n").filter(Boolean)) {
@@ -83,13 +87,28 @@ export function parseSessionFile(path: string): SessionMeta | null {
         s.cacheReadTokens += num(usage.cached_tokens ?? usage.cache_read_input_tokens);
       }
       if (typeof msg.role === "string") {
-        if (msg.role === "user") s.userTurns += 1;
-        if (msg.role === "assistant") s.assistantTurns += 1;
+        if (msg.role === "user") {
+          s.userTurns += 1;
+          const text = typeof msg.content === "string" ? msg.content : "";
+          if (text) {
+            s.userCharsIn += text.length;
+            userParts.push(text);
+          }
+        }
+        if (msg.role === "assistant") {
+          s.assistantTurns += 1;
+          const text = typeof msg.content === "string" ? msg.content : "";
+          if (text) {
+            s.textCharsOut += text.length;
+            asstParts.push(text);
+          }
+        }
       }
     }
     const tool = asRecord(payload.tool_call) ?? asRecord(payload.function_call);
     if (tool && typeof tool.name === "string") {
-      bumpTool(calls, tool.name, Boolean(tool.error));
+      const errored = Boolean(tool.error);
+      bumpTool(calls, tool.name, errored);
       seq.push(tool.name);
       const args = asRecord(tool.arguments) ?? asRecord(tool.input);
       if (args) {
@@ -100,6 +119,15 @@ export function parseSessionFile(path: string): SessionMeta | null {
           }
         }
       }
+      const result = tool.result ?? tool.output ?? tool.error ?? payload.function_call_output;
+      events.push({
+        name: tool.name,
+        error: errored,
+        exitCode: parseExitCode(result),
+        argKeys: args ? Object.keys(args) : [],
+        inputPreview: preview(summarizeInput(args)),
+        resultPreview: preview(resultText(result)),
+      });
     }
   }
 
@@ -110,6 +138,9 @@ export function parseSessionFile(path: string): SessionMeta | null {
   }
   if (s.assistantTurns === 0 && hasMessage) s.assistantTurns = 1;
   applyToolMap(s, calls);
+  s.toolEvents = events.slice(0, EVENT_CAP);
+  s.userPromptPreview = preview(userParts.join("\n"));
+  s.assistantPreview = preview(asstParts.join("\n"));
   s.success = s.assistantTurns > 0 || s.tokensOut > 0;
   return finishSession(s, seq, langs);
 }

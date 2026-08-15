@@ -13,7 +13,8 @@ import {
   finishSession,
   shortHash,
 } from "./meta.js";
-import type { SessionMeta, ToolCallStat } from "./types.js";
+import { EVENT_CAP, parseExitCode, preview, resultText, summarizeInput } from "./redact.js";
+import type { SessionMeta, ToolCallStat, ToolEvent } from "./types.js";
 
 const CONVERSATION_KEYS = [
   "cursor-composer.conversations",
@@ -131,6 +132,9 @@ function mapConversation(c: Record<string, unknown>, cwdHint: string): SessionMe
   const langs = new Set<string>();
   const calls = new Map<string, ToolCallStat>();
   const seq: string[] = [];
+  const events: ToolEvent[] = [];
+  const userParts: string[] = [];
+  const asstParts: string[] = [];
 
   const model =
     pickString(c, ["model", "modelName"]) ||
@@ -169,13 +173,19 @@ function mapConversation(c: Record<string, unknown>, cwdHint: string): SessionMe
       pickString(asRecord(b.modelInfo), ["modelName", "model"]);
     if (bubbleModel) models.add(bubbleModel);
     const text = pickString(b, ["text", "content", "richText"]);
-    if (text && (role.includes("user") || role === "human")) s.userCharsIn += text.length;
-    if (text && (role.includes("assistant") || role.includes("ai"))) s.textCharsOut += text.length;
-    collectTools(b, langs, calls, seq);
+    if (text && (role.includes("user") || role === "human")) {
+      s.userCharsIn += text.length;
+      userParts.push(text);
+    }
+    if (text && (role.includes("assistant") || role.includes("ai"))) {
+      s.textCharsOut += text.length;
+      asstParts.push(text);
+    }
+    collectTools(b, langs, calls, seq, events);
     noteUsage(s, b);
   }
 
-  collectTools(c, langs, calls, seq);
+  collectTools(c, langs, calls, seq, events);
   noteUsage(s, c);
   if (models.size > 0) {
     s.modelsUsed = Array.from(models);
@@ -186,6 +196,9 @@ function mapConversation(c: Record<string, unknown>, cwdHint: string): SessionMe
     s.assistantTurns = 1;
   }
   applyToolMap(s, calls);
+  s.toolEvents = events.slice(0, EVENT_CAP);
+  s.userPromptPreview = preview(userParts.join("\n"));
+  s.assistantPreview = preview(asstParts.join("\n"));
   s.success = s.assistantTurns > 0 || s.toolCallCount > 0 || s.model !== "unknown";
   return finishSession(s, seq, langs);
 }
@@ -195,6 +208,7 @@ function collectTools(
   langs: Set<string>,
   calls: Map<string, ToolCallStat>,
   seq: string[],
+  events: ToolEvent[],
 ): void {
   const lists = [
     rec.toolCalls,
@@ -210,7 +224,8 @@ function collectTools(
       if (!t) continue;
       const name = pickString(t, ["name", "toolName", "tool", "type", "capabilityType"]);
       if (!name) continue;
-      bumpTool(calls, name, Boolean(t.isError || t.error));
+      const errored = Boolean(t.isError || t.error);
+      bumpTool(calls, name, errored);
       seq.push(name);
       const input = asRecord(t.params) ?? asRecord(t.input) ?? asRecord(t.args);
       if (input) {
@@ -221,6 +236,15 @@ function collectTools(
           }
         }
       }
+      const result = t.result ?? t.output ?? t.error;
+      events.push({
+        name,
+        error: errored,
+        exitCode: parseExitCode(result),
+        argKeys: input ? Object.keys(input) : [],
+        inputPreview: preview(summarizeInput(input)),
+        resultPreview: preview(resultText(result)),
+      });
     }
   }
 }
