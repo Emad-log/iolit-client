@@ -36,3 +36,23 @@ export function parseExitCode(value: unknown): number | null {
   const m = value.match(/exit code[:\s]+(-?\d+)/i);
   return m ? Number(m[1]) : null;
 }
+
+export function summarizeInput(input: Record<string, unknown> | null): string {
+  if (!input) return "";
+  const parts: string[] = [];
+  for (const [k, v] of Object.entries(input)) {
+    if (typeof v === "string") parts.push(`${k}=${v}`);
+    else if (typeof v === "number" || typeof v === "boolean") parts.push(`${k}=${v}`);
+  }
+  return parts.join(" ");
+}
+
+export function resultText(result: unknown): string {
+  if (result == null) return "";
+  if (typeof result === "string") return result;
+  try {
+    return JSON.stringify(result);
+  } catch {
+    return "";
+  }
+}

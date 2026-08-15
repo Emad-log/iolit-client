@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { join } from "node:path";
 import { readConversations } from "../detect-cursor.js";
+import { applyTier } from "../tiers.js";
 
 const FIXTURE = join(process.cwd(), "test", "fixtures", "cursor-state.vscdb");
 
@@ -16,4 +17,12 @@ test("cursor: maps conversations to SessionMeta", () => {
 
 test("cursor: missing db returns empty", () => {
   assert.deepEqual(readConversations("/nonexistent.vscdb", 10), []);
+});
+
+test("cursor: pulse strips any collected events", () => {
+  const sessions = readConversations(FIXTURE, 10).map((s) => applyTier(s, "pulse"));
+  for (const s of sessions) {
+    assert.equal(s.toolEvents.length, 0);
+    assert.equal(s.userPromptPreview, "");
+  }
 });
