@@ -1,6 +1,7 @@
 // Public payload schema. If a field isn't here, the client never sends it.
 
 export type ToolName = "claude" | "cursor" | "codex" | "copilot";
+export type ShareTier = "pulse" | "trace" | "raw";
 
 export interface ToolCallStat {
   name: string;
@@ -11,6 +12,15 @@ export interface ToolCallStat {
 export interface StopReasonStat {
   reason: string;
   count: number;
+}
+
+export interface ToolEvent {
+  name: string;
+  error: boolean;
+  exitCode: number | null;
+  argKeys: string[];
+  inputPreview: string;
+  resultPreview: string;
 }
 
 export interface SessionMeta {
@@ -54,6 +64,11 @@ export interface SessionMeta {
   langHints: string[];
   permissionMode: string;
   stopReasons: StopReasonStat[];
+  shareTier: ShareTier;
+  toolEvents: ToolEvent[];
+  userPromptPreview: string;
+  assistantPreview: string;
+  thinkingPreview: string;
 }
 
 export interface BatchPayload {
@@ -61,6 +76,7 @@ export interface BatchPayload {
   app: "iolit";
   batchId: string;
   createdAt: string;
+  shareTier: ShareTier;
   sessions: SessionMeta[];
 }
 
@@ -75,4 +91,7 @@ export const SESSION_KEYS = [
   "thinkingBlocks", "thinkingChars", "textCharsOut", "userCharsIn",
   "isSubagent", "cwdHash", "hasGit", "branchClass", "langHints",
   "permissionMode", "stopReasons",
+  "shareTier", "toolEvents", "userPromptPreview", "assistantPreview", "thinkingPreview",
 ] as const;
+
+export const BATCH_KEYS = ["version", "app", "batchId", "createdAt", "shareTier", "sessions"] as const;

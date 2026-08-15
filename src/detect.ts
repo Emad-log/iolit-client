@@ -12,7 +12,8 @@ import {
   finishSession,
   shortHash,
 } from "./meta.js";
-import type { SessionMeta, StopReasonStat, ToolCallStat } from "./types.js";
+import { EVENT_CAP, parseExitCode, preview } from "./redact.js";
+import type { SessionMeta, StopReasonStat, ToolCallStat, ToolEvent } from "./types.js";
 
 export async function findClaudeSessions(limit = 20): Promise<SessionMeta[]> {
   const dir = join(homedir(), ".claude", "projects");
@@ -62,6 +63,10 @@ export function parseClaudeSession(raw: string, path = ""): SessionMeta | null {
   const calls = new Map<string, ToolCallStat>();
   const seq: string[] = [];
   const stops = new Map<string, number>();
+  const events: ToolEvent[] = [];
+  const userParts: string[] = [];
+  const asstParts: string[] = [];
+  const thinkParts: string[] = [];
   let sawEvent = false;
 
   if (path.includes("/subagents/") || /\/agent-[a-z0-9]+\.jsonl$/i.test(path)) {
@@ -76,7 +81,7 @@ export function parseClaudeSession(raw: string, path = ""): SessionMeta | null {
       continue;
     }
     sawEvent = true;
-    ingestClaudeEntry(s, entry, models, langs, calls, seq, stops);
+    ingestClaudeEntry(s, entry, models, langs, calls, seq, stops, events, userParts, asstParts, thinkParts);
   }
 
   if (!sawEvent) return null;
@@ -88,6 +93,10 @@ export function parseClaudeSession(raw: string, path = ""): SessionMeta | null {
     .map(([reason, count]): StopReasonStat => ({ reason, count }))
     .sort((a, b) => b.count - a.count);
   applyToolMap(s, calls);
+  s.toolEvents = events.slice(0, EVENT_CAP);
+  s.userPromptPreview = preview(userParts.join("\n"));
+  s.assistantPreview = preview(asstParts.join("\n"));
+  s.thinkingPreview = preview(thinkParts.join("\n"));
   s.success = s.lastStopReason === "end_turn" && s.apiErrorCount === 0;
   return finishSession(s, seq, langs);
 }
@@ -100,6 +109,10 @@ function ingestClaudeEntry(
   calls: Map<string, ToolCallStat>,
   seq: string[],
   stops: Map<string, number>,
+  events: ToolEvent[],
+  userParts: string[],
+  asstParts: string[],
+  thinkParts: string[],
 ): void {
   const type = typeof entry.type === "string" ? entry.type : "";
   noteTime(s, entry.timestamp);
@@ -130,12 +143,15 @@ function ingestClaudeEntry(
       stops.set(msg.stop_reason, (stops.get(msg.stop_reason) ?? 0) + 1);
     }
     addUsage(s, asRecord(msg.usage));
-    walkContent(s, msg.content, langs, calls, seq);
+    walkContent(s, msg.content, langs, calls, seq, events, userParts, asstParts, thinkParts, type);
   }
 
-  walkContent(s, entry.content, langs, calls, seq);
-  if (!hasToolResultInMessage(entry) && isToolError(entry.toolUseResult)) {
-    markLastToolError(calls, seq);
+  walkContent(s, entry.content, langs, calls, seq, events, userParts, asstParts, thinkParts, type);
+  if (entry.toolUseResult != null) {
+    attachResult(events, entry.toolUseResult);
+    if (!hasToolResultInMessage(entry) && isToolError(entry.toolUseResult)) {
+      markLastToolError(calls, seq);
+    }
   }
 }
 
@@ -162,9 +178,15 @@ function walkContent(
   langs: Set<string>,
   calls: Map<string, ToolCallStat>,
   seq: string[],
+  events: ToolEvent[],
+  userParts: string[],
+  asstParts: string[],
+  thinkParts: string[],
+  entryType: string,
 ): void {
   if (typeof content === "string") {
     s.userCharsIn += content.length;
+    if (entryType === "user") userParts.push(content);
     return;
   }
   if (!Array.isArray(content)) return;
@@ -174,20 +196,50 @@ function walkContent(
     const kind = typeof c.type === "string" ? c.type : "";
     if (kind === "text" && typeof c.text === "string") {
       s.textCharsOut += c.text.length;
+      if (entryType === "assistant") asstParts.push(c.text);
+      else if (entryType === "user") userParts.push(c.text);
     } else if (kind === "thinking") {
       s.thinkingBlocks += 1;
       const think = typeof c.thinking === "string" ? c.thinking : typeof c.text === "string" ? c.text : "";
       s.thinkingChars += think.length;
+      if (think) thinkParts.push(think);
     } else if (kind === "tool_use") {
       const name = typeof c.name === "string" ? c.name : "unknown";
       const input = asRecord(c.input);
       bumpTool(calls, name);
       seq.push(name);
       collectLangs(langs, input);
+      events.push({
+        name,
+        error: false,
+        exitCode: null,
+        argKeys: input ? Object.keys(input) : [],
+        inputPreview: input ? preview(summarizeInput(input)) : "",
+        resultPreview: "",
+      });
     } else if (kind === "tool_result") {
       if (c.is_error === true) markLastToolError(calls, seq);
+      attachResult(events, c.content ?? c, c.is_error === true);
     }
   }
+}
+
+function summarizeInput(input: Record<string, unknown>): string {
+  const parts: string[] = [];
+  for (const [k, v] of Object.entries(input)) {
+    if (typeof v === "string") parts.push(`${k}=${v}`);
+    else if (typeof v === "number" || typeof v === "boolean") parts.push(`${k}=${v}`);
+  }
+  return parts.join(" ");
+}
+
+function attachResult(events: ToolEvent[], result: unknown, errored = false): void {
+  const last = events[events.length - 1];
+  if (!last) return;
+  const text = typeof result === "string" ? result : JSON.stringify(result ?? "");
+  last.resultPreview = preview(text);
+  last.exitCode = parseExitCode(text);
+  if (errored || isToolError(result)) last.error = true;
 }
 
 function addUsage(s: SessionMeta, usage: Record<string, unknown> | null): void {

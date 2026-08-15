@@ -12,6 +12,7 @@ export interface HistoryEntry {
   sessions: number;
   sizeKb: number;
   estUsd: number;
+  shareTier?: string;
 }
 
 export function recordSent(entry: HistoryEntry, dir = DEFAULT_DIR) {

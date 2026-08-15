@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { parseClaudeSession } from "../detect.js";
+import { applyTier } from "../tiers.js";
 
 const sample = [
   JSON.stringify({
@@ -88,10 +89,31 @@ test("claude: extracts loop shape, cache, tools, duration", () => {
   assert.equal(s.cliVersion, "2.1.77");
 });
 
-test("claude: never copies free text or paths", () => {
-  const s = parseClaudeSession(sample);
+test("claude: pulse never copies free text or paths", () => {
+  const s = applyTier(parseClaudeSession(sample)!, "pulse");
   const json = JSON.stringify(s);
   assert.equal(json.includes("deploy the staging"), false);
   assert.equal(json.includes("/home/ubuntu"), false);
   assert.equal(json.includes("need to copy"), false);
+  assert.equal(s.toolEvents.length, 0);
+});
+
+test("claude: trace keeps scrubbed tool args", () => {
+  const s = applyTier(parseClaudeSession(sample)!, "trace");
+  assert.equal(s.toolEvents.length, 2);
+  assert.equal(s.toolEvents[0].name, "Bash");
+  assert.match(s.toolEvents[0].inputPreview, /package\.json/);
+  assert.equal(s.toolEvents[1].name, "Read");
+  assert.equal(s.toolEvents[1].inputPreview.includes("/home/ubuntu"), false);
+  assert.match(s.toolEvents[1].inputPreview, /app\.ts/);
+  assert.equal(s.userPromptPreview, "");
+});
+
+test("claude: raw keeps prompt and thinking, still scrubs paths", () => {
+  const s = applyTier(parseClaudeSession(sample)!, "raw");
+  assert.match(s.userPromptPreview, /deploy the staging/);
+  assert.match(s.thinkingPreview, /need to copy/);
+  assert.match(s.assistantPreview, /done/);
+  const json = JSON.stringify(s);
+  assert.equal(json.includes("/home/ubuntu"), false);
 });
