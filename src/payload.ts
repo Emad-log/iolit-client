@@ -1,31 +1,21 @@
 // Pure function: session metadata in, JSON payload out. The entire trust surface.
 
-import type { BatchPayload, SessionMeta } from "./types.js";
+import { applyTier } from "./tiers.js";
+import type { BatchPayload, SessionMeta, ShareTier } from "./types.js";
 
-export function buildPayload(sessions: SessionMeta[]): BatchPayload {
+export function buildPayload(sessions: SessionMeta[], tier: ShareTier = "pulse"): BatchPayload {
   return {
     version: 1,
     app: "iolit",
     batchId: randomId(),
     createdAt: new Date().toISOString(),
-    sessions: sessions.map(cloneSession),
+    shareTier: tier,
+    sessions: sessions.map((s) => applyTier(s, tier)),
   };
 }
 
 export function hasSessions(p: BatchPayload): boolean {
   return p.sessions.length > 0;
-}
-
-function cloneSession(s: SessionMeta): SessionMeta {
-  return {
-    ...s,
-    modelsUsed: [...s.modelsUsed],
-    toolsUsed: [...s.toolsUsed],
-    toolCalls: s.toolCalls.map((t) => ({ ...t })),
-    toolSequence: [...s.toolSequence],
-    langHints: [...s.langHints],
-    stopReasons: s.stopReasons.map((r) => ({ ...r })),
-  };
 }
 
 function randomId(): string {

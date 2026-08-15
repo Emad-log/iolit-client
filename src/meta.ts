@@ -47,6 +47,11 @@ export function emptySession(tool: ToolName): SessionMeta {
     langHints: [],
     permissionMode: "",
     stopReasons: [],
+    shareTier: "pulse",
+    toolEvents: [],
+    userPromptPreview: "",
+    assistantPreview: "",
+    thinkingPreview: "",
   };
 }
 

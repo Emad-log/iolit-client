@@ -29,29 +29,18 @@ node dist/cli.js
 
 ## How it works
 
-1. `iolit` reads session metadata from your local Claude, Cursor, and Codex history
-2. It shows you the batch: sessions, models, size, estimate, before anything leaves
-3. You approve. Only then is it sent to the marketplace
+1. `iolit` reads local Claude, Cursor, Codex, and Copilot history
+2. It shows three share tiers and an estimate for each
+3. You pick pulse, trace, or raw, then approve. Only then is it sent
 4. `iolit history` shows every batch you've sent
 
-## What leaves your machine
+## Share tiers
 
-Metadata only. The full schema is `src/types.ts`:
+- **pulse**: loop stats only. No prompts, no tool args, no paths.
+- **trace**: pulse plus redacted tool args/results. Paths scrubbed, secrets stripped.
+- **raw**: also includes prompt, reply, and thinking previews. Type `YES` to confirm.
 
-```
-tool, model, modelsUsed, startedAt, endedAt, durationSec, hourOfDay, dayOfWeek,
-cliVersion, userTurns, assistantTurns, tokensIn, tokensOut,
-cacheCreationTokens, cacheReadTokens, cacheHitRatio,
-webSearchRequests, webFetchRequests, serviceTier, speed,
-taskType, success, lastStopReason, apiErrorCount,
-toolErrorCount, toolCallCount, toolsUsed, toolCalls, toolSequence,
-thinkingBlocks, thinkingChars, textCharsOut, userCharsIn,
-isSubagent, cwdHash, hasGit, branchClass, langHints,
-permissionMode, stopReasons
-```
-
-No prompts. No code. No file paths. Paths are hashed. Nothing else exists in the payload, and
-the schema test enforces it.
+The schema is `src/types.ts`. Higher tiers pay more (4x / 12x the pulse estimate). Estimates are unverified.
 
 ## Build & test
 
