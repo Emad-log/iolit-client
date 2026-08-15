@@ -8,13 +8,24 @@ export function buildPayload(sessions: SessionMeta[]): BatchPayload {
     app: "iolit",
     batchId: randomId(),
     createdAt: new Date().toISOString(),
-    sessions: sessions.map((s) => ({ ...s })),
+    sessions: sessions.map(cloneSession),
   };
 }
 
-// A batch with no sessions is never valid.
 export function hasSessions(p: BatchPayload): boolean {
   return p.sessions.length > 0;
+}
+
+function cloneSession(s: SessionMeta): SessionMeta {
+  return {
+    ...s,
+    modelsUsed: [...s.modelsUsed],
+    toolsUsed: [...s.toolsUsed],
+    toolCalls: s.toolCalls.map((t) => ({ ...t })),
+    toolSequence: [...s.toolSequence],
+    langHints: [...s.langHints],
+    stopReasons: s.stopReasons.map((r) => ({ ...r })),
+  };
 }
 
 function randomId(): string {

@@ -1,14 +1,14 @@
 {
   "name": "iolit-client",
   "version": "0.1.0",
-  "description": "Iolit agent — captures AI session metadata locally, shows you what's sent, one network call.",
+  "description": "Iolit agent: captures AI session metadata locally, shows you what's sent, one network call.",
   "type": "module",
   "bin": {
     "iolit": "./dist/cli.js"
   },
   "scripts": {
     "build": "tsc",
-    "test": "node --test dist/test/payload.test.js dist/test/cursor.test.js dist/test/codex.test.js dist/test/history.test.js",
+    "test": "node --test dist/test/*.test.js",
     "check:single-send": "node scripts/check-network.js"
   },
   "engines": {
