@@ -1,7 +1,4 @@
-// Cursor session detection.
-// Cursor is a VS Code fork: conversations live in SQLite files named
-// state.vscdb under each workspace's storage dir. We open them read-only,
-// pull the conversation keys from ItemTable, and map them to SessionMeta.
+// Cursor sessions: SQLite state.vscdb under workspaceStorage. Reads metadata only.
 
 import { readdirSync, existsSync } from "node:fs";
 import { homedir } from "node:os";

@@ -1,7 +1,4 @@
-// Codex CLI session detection.
-// Codex stores one JSONL file per session under ~/.codex/sessions/.
-// Entries have type "response_item" with message + usage; we read only
-// model, token counts, timestamps, and tool names.
+// Codex sessions: JSONL under ~/.codex/sessions/. Reads metadata only.
 
 import { readdirSync, readFileSync, existsSync } from "node:fs";
 import { homedir } from "node:os";
@@ -67,7 +64,7 @@ export function parseSessionFile(path: string): SessionMeta | null {
     tokensOut,
     taskType: "unknown",
     success: true,
-    toolsUsed: [...toolsUsed],
+    toolsUsed: Array.from(toolsUsed),
     hourOfDay: new Date().getHours(),
   };
 }
