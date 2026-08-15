@@ -57,13 +57,17 @@ export function parseCopilotTranscript(raw: string, cwdHint = ""): SessionMeta |
   const calls = new Map<string, ToolCallStat>();
   const seq: string[] = [];
 
-  const model = pickString(rec, ["model", "modelId", "modelName"]);
+  const selected = asRecord(asRecord(rec.inputState)?.selectedModel);
+  const model =
+    pickString(rec, ["model", "modelId", "modelName"]) ||
+    pickString(selected, ["identifier"]) ||
+    pickString(asRecord(selected?.metadata), ["id", "name"]);
   if (model) {
     s.model = model;
     models.add(model);
   }
-  const started = pickString(rec, ["createdAt", "timestamp", "startedAt"]);
-  const ended = pickString(rec, ["lastMessageDate", "updatedAt", "endedAt"]);
+  const started = isoFrom(rec.createdAt ?? rec.creationDate ?? rec.timestamp ?? rec.startedAt);
+  const ended = isoFrom(rec.lastMessageDate ?? rec.updatedAt ?? rec.endedAt);
   if (started) s.startedAt = started;
   if (ended) s.endedAt = ended;
   if (cwdHint) s.cwdHash = shortHash(cwdHint);
@@ -73,9 +77,13 @@ export function parseCopilotTranscript(raw: string, cwdHint = ""): SessionMeta |
     const r = asRecord(item);
     if (!r) continue;
     const role = (pickString(r, ["role", "kind", "type"]) || "").toLowerCase();
-    const message = asRecord(r.message) ?? r;
-    const text = pickString(message, ["text", "content", "value"]);
-    if (role.includes("user") || r.request) {
+    const message = asRecord(r.message);
+    const text = pickString(message ?? r, ["text", "content", "value"]);
+    if (Array.isArray(r.response)) {
+      s.userTurns += 1;
+      if (text) s.userCharsIn += text.length;
+      s.assistantTurns += 1;
+    } else if (role.includes("user") || (message && !role.includes("assistant"))) {
       s.userTurns += 1;
       if (text) s.userCharsIn += text.length;
     } else {
@@ -84,12 +92,17 @@ export function parseCopilotTranscript(raw: string, cwdHint = ""): SessionMeta |
     }
     const m = pickString(r, ["model", "modelId"]) || pickString(asRecord(r.model), ["id", "name"]);
     if (m) models.add(m);
-    const usage = asRecord(r.usage) ?? asRecord(r.result);
+    const usage = asRecord(r.usage);
     if (usage) {
       s.tokensIn += num(usage.input_tokens ?? usage.promptTokens);
       s.tokensOut += num(usage.output_tokens ?? usage.completionTokens);
     }
+    const meta = asRecord(asRecord(r.result)?.metadata);
+    const cacheKey = typeof meta?.cacheKey === "string" ? meta.cacheKey : "";
+    if (cacheKey && !s.cwdHash) s.cwdHash = shortHash(cacheKey);
+    walkResponseParts(r.response, langs, calls, seq, s);
     walkTools(r, langs, calls, seq);
+    if (meta) walkTools(meta, langs, calls, seq);
   }
 
   if (s.userTurns === 0 && s.assistantTurns === 0 && models.size === 0) return null;
@@ -142,6 +155,52 @@ function workspaceCwd(wsDir: string): string {
   } catch {
     return "";
   }
+}
+
+function walkResponseParts(
+  parts: unknown,
+  langs: Set<string>,
+  calls: Map<string, ToolCallStat>,
+  seq: string[],
+  s: SessionMeta,
+): void {
+  if (!Array.isArray(parts)) return;
+  for (const part of parts) {
+    const p = asRecord(part);
+    if (!p) continue;
+    const kind = pickString(p, ["kind", "type"]);
+    if (kind === "thinking") {
+      s.thinkingBlocks += 1;
+      s.thinkingChars += pickString(p, ["value", "text", "thinking"]).length;
+    } else if (kind === "toolInvocationSerialized") {
+      const name = pickString(p, ["toolName", "toolId", "name"]);
+      if (name) {
+        bumpTool(calls, name, p.isComplete === false);
+        seq.push(name);
+      }
+    } else if (!kind && typeof p.value === "string") {
+      s.textCharsOut += p.value.length;
+    }
+    const specific = asRecord(p.toolSpecificData);
+    if (specific) {
+      const cmd = pickString(asRecord(specific.commandLine), ["original", "text"]);
+      const ext = cmd ? extHint(cmd) : null;
+      if (ext) langs.add(ext);
+    }
+  }
+}
+
+function isoFrom(v: unknown): string {
+  if (typeof v === "string" && v) {
+    if (/^\d+$/.test(v)) return isoFrom(Number(v));
+    return v;
+  }
+  if (typeof v === "number" && Number.isFinite(v)) {
+    const ms = v < 1e12 ? v * 1000 : v;
+    const d = new Date(ms);
+    if (!Number.isNaN(d.getTime())) return d.toISOString();
+  }
+  return "";
 }
 
 function walkTools(
