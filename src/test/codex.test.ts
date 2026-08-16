@@ -6,18 +6,36 @@ import { applyTier } from "../tiers.js";
 
 const FIXTURE = join(process.cwd(), "test", "fixtures", "codex-session.jsonl");
 
-test("codex: maps session file to SessionMeta", () => {
+test("codex: maps a real rollout file to SessionMeta", () => {
   const s = parseSessionFile(FIXTURE);
   assert.ok(s);
   assert.equal(s.tool, "codex");
   assert.equal(s.model, "gpt-5.2-codex");
-  assert.equal(s.tokensIn, 1500);
+  assert.equal(s.cliVersion, "0.115.0");
+  assert.match(s.cwdHash, /^[0-9a-f]{12}$/);
+  assert.equal(s.tokensIn, 1700);
   assert.equal(s.tokensOut, 700);
-  assert.deepEqual(s.toolsUsed, ["shell"]);
-  assert.ok(s.startedAt.startsWith("2026-08-06"));
-  assert.equal(s.toolEvents.length, 1);
+  assert.equal(s.cacheReadTokens, 500);
+  assert.equal(s.userTurns, 1);
+  assert.equal(s.assistantTurns, 2);
+  assert.equal(s.userCharsIn, "run the tests in src/app.ts".length);
+  assert.ok(s.thinkingBlocks >= 1);
+});
+
+test("codex: event_msg tool calls are captured with outputs", () => {
+  const s = parseSessionFile(FIXTURE)!;
+  assert.deepEqual(s.toolsUsed, ["shell", "apply_patch"]);
+  assert.equal(s.toolCallCount, 2);
+  assert.equal(s.toolErrorCount, 1);
+  assert.equal(s.toolEvents.length, 2);
   assert.equal(s.toolEvents[0].name, "shell");
+  assert.equal(s.toolEvents[0].exitCode, 1);
+  assert.equal(s.toolEvents[0].error, true);
   assert.match(s.toolEvents[0].inputPreview, /npm test/);
+  assert.match(s.toolEvents[0].resultPreview, /42 passed/);
+  assert.equal(s.toolEvents[1].name, "apply_patch");
+  assert.equal(s.toolEvents[1].exitCode, null);
+  assert.ok(s.langHints.includes("ts"));
 });
 
 test("codex: missing file returns null", () => {

@@ -27,8 +27,10 @@ export function findCursorSessions(limit = 20): SessionMeta[] {
   const dirs = [
     join(homedir(), "Library", "Application Support", "Cursor", "User", "workspaceStorage"),
     join(homedir(), ".config", "Cursor", "User", "workspaceStorage"),
+    join(homedir(), "AppData", "Roaming", "Cursor", "User", "workspaceStorage"),
     join(homedir(), "Library", "Application Support", "Cursor", "User", "globalStorage"),
     join(homedir(), ".config", "Cursor", "User", "globalStorage"),
+    join(homedir(), "AppData", "Roaming", "Cursor", "User", "globalStorage"),
   ];
 
   const sessions: SessionMeta[] = [];

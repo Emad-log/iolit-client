@@ -1,4 +1,9 @@
-{"type":"response_item","timestamp":"2026-08-06T09:00:00Z","payload":{"message":{"role":"user","content":"run the tests in src/app.ts"}}}
-{"type":"response_item","timestamp":"2026-08-06T09:00:00Z","payload":{"message":{"model":"gpt-5.2-codex","usage":{"input_tokens":1200,"output_tokens":600}}}}
-{"type":"response_item","timestamp":"2026-08-06T09:01:00Z","payload":{"tool_call":{"name":"shell","arguments":{"command":"npm test src/app.ts"}}}}
-{"type":"response_item","timestamp":"2026-08-06T09:02:00Z","payload":{"message":{"role":"assistant","content":"tests passed","model":"gpt-5.2-codex","usage":{"input_tokens":300,"output_tokens":100}}}}
+{"type":"session_meta","timestamp":"2026-08-06T09:00:00Z","payload":{"id":"session-abc123","cwd":"/home/user/projects/api","cli_version":"0.115.0"}}
+{"type":"response_item","timestamp":"2026-08-06T09:00:01Z","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"run the tests in src/app.ts"}]}}
+{"type":"response_item","timestamp":"2026-08-06T09:00:02Z","payload":{"type":"reasoning","summary":[{"type":"summary_text","text":"need to locate the test runner and execute it"}]}}
+{"type":"event_msg","timestamp":"2026-08-06T09:00:03Z","payload":{"type":"function_call","name":"shell","arguments":"{\"command\":\"npm test src/app.ts\"}","call_id":"call_1"}}
+{"type":"event_msg","timestamp":"2026-08-06T09:00:04Z","payload":{"type":"function_call_output","call_id":"call_1","output":"42 passed, 1 failed\nexit code 1"}}
+{"type":"response_item","timestamp":"2026-08-06T09:00:05Z","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"tests failed, one assertion to fix"}],"model":"gpt-5.2-codex","usage":{"input_tokens":1200,"output_tokens":600,"total_tokens":1800,"input_tokens_details":{"cached_tokens":300}}}}
+{"type":"event_msg","timestamp":"2026-08-06T09:00:06Z","payload":{"type":"function_call","name":"apply_patch","arguments":"{\"path\":\"src/app.ts\",\"diff\":\"--- a/src/app.ts\"}","call_id":"call_2"}}
+{"type":"event_msg","timestamp":"2026-08-06T09:00:07Z","payload":{"type":"function_call_output","call_id":"call_2","output":"patch applied"}}
+{"type":"response_item","timestamp":"2026-08-06T09:00:08Z","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"fixed, tests should pass now"}],"model":"gpt-5.2-codex","usage":{"input_tokens":500,"output_tokens":100,"total_tokens":600,"input_tokens_details":{"cached_tokens":200}}}}
