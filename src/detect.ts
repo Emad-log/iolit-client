@@ -1,4 +1,4 @@
-// Claude sessions: JSONL under ~/.claude/projects/<project>/. Structured fields only.
+// Claude JSONL under ~/.claude/projects/.
 
 import { readdir, readFile, stat } from "node:fs/promises";
 import { homedir } from "node:os";
@@ -12,7 +12,7 @@ import {
   finishSession,
   shortHash,
 } from "./meta.js";
-import { EVENT_CAP, parseExitCode, preview } from "./redact.js";
+import { EVENT_CAP, parseExitCode, preview, summarizeInput } from "./redact.js";
 import type { SessionMeta, StopReasonStat, ToolCallStat, ToolEvent } from "./types.js";
 
 export async function findClaudeSessions(limit = 20): Promise<SessionMeta[]> {
@@ -48,6 +48,8 @@ async function walkJsonl(dir: string, out: { path: string; mtime: number }[]): P
 }
 
 export async function readSessionFile(path: string): Promise<SessionMeta | null> {
+  const st = await stat(path).catch(() => null);
+  if (!st || st.size > 2_000_000) return null;
   const raw = await readFile(path, "utf8").catch(() => null);
   if (!raw) return null;
   return parseClaudeSession(raw, path);
@@ -132,6 +134,13 @@ function ingestClaudeEntry(
 
   if (type === "assistant") s.assistantTurns += 1;
   if (type === "user" && !isToolResultUser(entry)) s.userTurns += 1;
+  if (type === "last-prompt" && typeof entry.lastPrompt === "string" && entry.lastPrompt) {
+    if (s.userTurns === 0) s.userTurns = 1;
+    if (userParts.length === 0) {
+      s.userCharsIn += entry.lastPrompt.length;
+      userParts.push(entry.lastPrompt);
+    }
+  }
 
   const msg = asRecord(entry.message);
   if (msg) {
@@ -195,9 +204,13 @@ function walkContent(
     if (!c) continue;
     const kind = typeof c.type === "string" ? c.type : "";
     if (kind === "text" && typeof c.text === "string") {
-      s.textCharsOut += c.text.length;
-      if (entryType === "assistant") asstParts.push(c.text);
-      else if (entryType === "user") userParts.push(c.text);
+      if (entryType === "assistant") {
+        s.textCharsOut += c.text.length;
+        asstParts.push(c.text);
+      } else if (entryType === "user") {
+        s.userCharsIn += c.text.length;
+        userParts.push(c.text);
+      }
     } else if (kind === "thinking") {
       s.thinkingBlocks += 1;
       const think = typeof c.thinking === "string" ? c.thinking : typeof c.text === "string" ? c.text : "";
@@ -222,15 +235,6 @@ function walkContent(
       attachResult(events, c.content ?? c, c.is_error === true);
     }
   }
-}
-
-function summarizeInput(input: Record<string, unknown>): string {
-  const parts: string[] = [];
-  for (const [k, v] of Object.entries(input)) {
-    if (typeof v === "string") parts.push(`${k}=${v}`);
-    else if (typeof v === "number" || typeof v === "boolean") parts.push(`${k}=${v}`);
-  }
-  return parts.join(" ");
 }
 
 function attachResult(events: ToolEvent[], result: unknown, errored = false): void {

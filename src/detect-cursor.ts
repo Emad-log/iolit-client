@@ -1,4 +1,4 @@
-// Cursor sessions: SQLite state.vscdb. Structured fields only.
+// Cursor state.vscdb. Structured fields only.
 
 import { readdirSync, existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";

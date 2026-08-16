@@ -7,7 +7,6 @@ const UNIX_PATH_RE = /(?:\/[\w.+@-]+){2,}/g;
 const WIN_PATH_RE = /[A-Za-z]:\\(?:[^\s\\]+\\)+[^\s\\]+/g;
 
 export const PREVIEW_CAP = 240;
-export const RAW_TEXT_CAP = 4000;
 export const EVENT_CAP = 80;
 
 export function redactSecrets(text: string): string {
@@ -24,10 +23,6 @@ export function preview(text: string, cap = PREVIEW_CAP): string {
   const clean = scrubPaths(redactSecrets(text)).replace(/\s+/g, " ").trim();
   if (clean.length <= cap) return clean;
   return clean.slice(0, cap);
-}
-
-export function joinPreview(parts: string[], cap = RAW_TEXT_CAP): string {
-  return preview(parts.join("\n"), cap);
 }
 
 export function parseExitCode(value: unknown): number | null {

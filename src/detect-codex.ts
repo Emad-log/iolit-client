@@ -1,4 +1,4 @@
-// Codex sessions: JSONL under ~/.codex/sessions/. Structured fields only.
+// Codex JSONL under ~/.codex/sessions/.
 
 import { readdirSync, readFileSync, existsSync, statSync } from "node:fs";
 import { homedir } from "node:os";
