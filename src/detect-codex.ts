@@ -1,5 +1,9 @@
 // Codex JSONL under ~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl.
-// Real format: session_meta, response_item (messages, reasoning), event_msg (tool calls).
+// Real rollout shape (v0.115+ / v0.130): top-level events are session_meta,
+// response_item, event_msg, turn_context. Token usage lives in
+// event_msg/token_count (cumulative total_token_usage), the model is in
+// turn_context, and reasoning text is in event_msg/agent_message (plus
+// response_item/reasoning on some builds).
 
 import { readdirSync, readFileSync, existsSync, statSync } from "node:fs";
 import { homedir } from "node:os";
@@ -75,7 +79,7 @@ export function parseSessionFile(path: string): SessionMeta | null {
   const userParts: string[] = [];
   const asstParts: string[] = [];
   const thinkParts: string[] = [];
-  let sawMessage = false;
+  let sawContent = false;
 
   for (const line of raw.split("\n").filter(Boolean)) {
     let entry: Record<string, unknown>;
@@ -84,29 +88,46 @@ export function parseSessionFile(path: string): SessionMeta | null {
     } catch {
       continue;
     }
-    if (typeof entry.timestamp === "string" && entry.timestamp) {
-      if (!s.startedAt) s.startedAt = entry.timestamp;
-      s.endedAt = entry.timestamp;
-    }
+    noteTime(s, entry.timestamp);
     const payload = asRecord(entry.payload);
     if (!payload) continue;
     const kind = typeof payload.type === "string" ? payload.type : "";
 
     if (entry.type === "session_meta") {
       ingestSessionMeta(s, payload);
-    } else if (kind === "message") {
-      sawMessage = true;
-      ingestMessage(s, payload, models, userParts, asstParts);
-    } else if (kind === "function_call") {
-      ingestFunctionCall(payload, calls, seq, events, byCallId, langs);
-    } else if (kind === "function_call_output") {
-      ingestFunctionOutput(payload, calls, byCallId);
-    } else if (kind === "reasoning") {
-      ingestReasoning(s, payload, thinkParts);
+    } else if (entry.type === "turn_context") {
+      if (typeof payload.model === "string" && payload.model) models.add(payload.model);
+    } else if (entry.type === "event_msg") {
+      if (kind === "token_count") {
+        ingestTokenCount(s, payload);
+      } else if (kind === "agent_message") {
+        sawContent = true;
+        ingestThinking(s, payload.message ?? payload.content, thinkParts);
+      } else if (kind === "user_message") {
+        sawContent = true;
+        ingestUserMessage(s, payload, userParts);
+      }
+      // task_started / task_complete / turn_aborted: no structured fields
+    } else if (entry.type === "response_item") {
+      if (kind === "message") {
+        sawContent = true;
+        ingestMessage(s, payload, models, userParts, asstParts);
+      } else if (kind === "function_call") {
+        sawContent = true;
+        ingestFunctionCall(payload, calls, seq, events, byCallId, langs);
+      } else if (kind === "function_call_output") {
+        sawContent = true;
+        ingestFunctionOutput(payload, calls, byCallId);
+      } else if (kind === "reasoning") {
+        sawContent = true;
+        ingestThinking(s, payload.summary ?? payload.content, thinkParts);
+      }
+      // custom_tool_call and others: ignored
     }
+    // entry.type === "compacted": ignored
   }
 
-  if (!sawMessage && calls.size === 0) return null;
+  if (!sawContent) return null;
   if (models.size > 0) {
     s.modelsUsed = Array.from(models);
     s.model = s.modelsUsed[s.modelsUsed.length - 1] ?? "unknown";
@@ -123,7 +144,6 @@ export function parseSessionFile(path: string): SessionMeta | null {
 function ingestSessionMeta(s: SessionMeta, payload: Record<string, unknown>): void {
   if (typeof payload.cli_version === "string" && payload.cli_version) s.cliVersion = payload.cli_version;
   if (typeof payload.cwd === "string" && payload.cwd && !s.cwdHash) s.cwdHash = shortHash(payload.cwd);
-  if (typeof payload.timestamp === "string" && payload.timestamp && !s.startedAt) s.startedAt = payload.timestamp;
 }
 
 function ingestMessage(
@@ -135,7 +155,6 @@ function ingestMessage(
 ): void {
   const role = typeof payload.role === "string" ? payload.role : "";
   if (typeof payload.model === "string" && payload.model) models.add(payload.model);
-  addUsage(s, asRecord(payload.usage));
   const text = contentText(payload.content);
   if (role === "user") {
     s.userTurns += 1;
@@ -150,6 +169,23 @@ function ingestMessage(
       asstParts.push(text);
     }
   }
+  // role "developer" (system prompt) is intentionally not counted
+}
+
+function ingestUserMessage(s: SessionMeta, payload: Record<string, unknown>, userParts: string[]): void {
+  const text = typeof payload.message === "string" ? payload.message : contentText(payload.content);
+  if (!text) return;
+  s.userTurns += 1;
+  s.userCharsIn += text.length;
+  userParts.push(text);
+}
+
+function ingestThinking(s: SessionMeta, raw: unknown, thinkParts: string[]): void {
+  const text = contentText(raw);
+  if (!text) return;
+  s.thinkingBlocks += 1;
+  s.thinkingChars += text.length;
+  thinkParts.push(text);
 }
 
 function ingestFunctionCall(
@@ -208,20 +244,35 @@ function ingestFunctionOutput(
   }
 }
 
-function ingestReasoning(s: SessionMeta, payload: Record<string, unknown>, thinkParts: string[]): void {
-  s.thinkingBlocks += 1;
-  const text = contentText(payload.summary ?? payload.content);
-  s.thinkingChars += text.length;
-  if (text) thinkParts.push(text);
+function ingestTokenCount(s: SessionMeta, payload: Record<string, unknown>): void {
+  const info = asRecord(payload.info);
+  const total =
+    asRecord(info?.total_token_usage) ??
+    asRecord(payload.total_token_usage) ??
+    asRecord(payload.usage) ??
+    asRecord(payload.token_usage);
+  if (!total) return;
+  const tokensIn = num(total.input_tokens ?? total.prompt_tokens);
+  const tokensOut =
+    num(total.output_tokens ?? total.completion_tokens) + num(total.reasoning_output_tokens);
+  const cacheRead = num(
+    total.cached_input_tokens ?? total.cache_read_input_tokens ?? total.cached_tokens,
+  );
+  // total_token_usage is cumulative: keep the largest seen per field.
+  s.tokensIn = Math.max(s.tokensIn, tokensIn);
+  s.tokensOut = Math.max(s.tokensOut, tokensOut);
+  s.cacheReadTokens = Math.max(s.cacheReadTokens, cacheRead);
 }
 
-function addUsage(s: SessionMeta, usage: Record<string, unknown> | null): void {
-  if (!usage) return;
-  s.tokensIn += num(usage.input_tokens ?? usage.prompt_tokens);
-  s.tokensOut += num(usage.output_tokens ?? usage.completion_tokens);
-  const details = asRecord(usage.input_tokens_details);
-  s.cacheReadTokens +=
-    num(usage.cached_tokens) + num(usage.cache_read_input_tokens) + (details ? num(details.cached_tokens) : 0);
+function contentText(content: unknown): string {
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return "";
+  const parts: string[] = [];
+  for (const item of content) {
+    const c = asRecord(item);
+    if (c && typeof c.text === "string" && c.text) parts.push(c.text);
+  }
+  return parts.join("\n");
 }
 
 function parseArgs(raw: unknown): Record<string, unknown> | null {
@@ -237,15 +288,10 @@ function parseArgs(raw: unknown): Record<string, unknown> | null {
   return null;
 }
 
-function contentText(content: unknown): string {
-  if (typeof content === "string") return content;
-  if (!Array.isArray(content)) return "";
-  const parts: string[] = [];
-  for (const item of content) {
-    const c = asRecord(item);
-    if (c && typeof c.text === "string" && c.text) parts.push(c.text);
-  }
-  return parts.join("\n");
+function noteTime(s: SessionMeta, ts: unknown): void {
+  if (typeof ts !== "string" || !ts) return;
+  if (!s.startedAt) s.startedAt = ts;
+  s.endedAt = ts;
 }
 
 function asRecord(v: unknown): Record<string, unknown> | null {

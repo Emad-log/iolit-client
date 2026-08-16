@@ -11,18 +11,24 @@ test("codex: maps a real rollout file to SessionMeta", () => {
   assert.ok(s);
   assert.equal(s.tool, "codex");
   assert.equal(s.model, "gpt-5.2-codex");
+  assert.deepEqual(s.modelsUsed, ["gpt-5.2-codex"]);
   assert.equal(s.cliVersion, "0.115.0");
   assert.match(s.cwdHash, /^[0-9a-f]{12}$/);
-  assert.equal(s.tokensIn, 1700);
-  assert.equal(s.tokensOut, 700);
-  assert.equal(s.cacheReadTokens, 500);
   assert.equal(s.userTurns, 1);
   assert.equal(s.assistantTurns, 2);
   assert.equal(s.userCharsIn, "run the tests in src/app.ts".length);
-  assert.ok(s.thinkingBlocks >= 1);
+  assert.equal(s.thinkingBlocks, 1);
+  assert.ok(s.thinkingChars > 0);
 });
 
-test("codex: event_msg tool calls are captured with outputs", () => {
+test("codex: token usage comes from event_msg/token_count", () => {
+  const s = parseSessionFile(FIXTURE)!;
+  assert.equal(s.tokensIn, 1700);
+  assert.equal(s.tokensOut, 1000); // output 700 + reasoning 300
+  assert.equal(s.cacheReadTokens, 500);
+});
+
+test("codex: function_call/output are paired by call_id", () => {
   const s = parseSessionFile(FIXTURE)!;
   assert.deepEqual(s.toolsUsed, ["shell", "apply_patch"]);
   assert.equal(s.toolCallCount, 2);
@@ -35,6 +41,7 @@ test("codex: event_msg tool calls are captured with outputs", () => {
   assert.match(s.toolEvents[0].resultPreview, /42 passed/);
   assert.equal(s.toolEvents[1].name, "apply_patch");
   assert.equal(s.toolEvents[1].exitCode, null);
+  assert.equal(s.toolEvents[1].error, false);
   assert.ok(s.langHints.includes("ts"));
 });
 
