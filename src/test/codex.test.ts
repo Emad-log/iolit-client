@@ -6,18 +6,55 @@ import { applyTier } from "../tiers.js";
 
 const FIXTURE = join(process.cwd(), "test", "fixtures", "codex-session.jsonl");
 
-test("codex: maps session file to SessionMeta", () => {
+test("codex: maps a real rollout file to SessionMeta", () => {
   const s = parseSessionFile(FIXTURE);
   assert.ok(s);
   assert.equal(s.tool, "codex");
   assert.equal(s.model, "gpt-5.2-codex");
-  assert.equal(s.tokensIn, 1500);
-  assert.equal(s.tokensOut, 700);
-  assert.deepEqual(s.toolsUsed, ["shell"]);
-  assert.ok(s.startedAt.startsWith("2026-08-06"));
-  assert.equal(s.toolEvents.length, 1);
+  assert.deepEqual(s.modelsUsed, ["gpt-5.2-codex"]);
+  assert.equal(s.cliVersion, "0.115.0");
+  assert.match(s.cwdHash, /^[0-9a-f]{12}$/);
+  assert.equal(s.userTurns, 1);
+  assert.equal(s.assistantTurns, 2);
+  assert.equal(s.userCharsIn, "run the tests in src/app.ts".length);
+  assert.equal(s.thinkingBlocks, 1);
+  assert.ok(s.thinkingChars > 0);
+  assert.equal(s.webSearchRequests, 1);
+});
+
+test("codex: event_msg copies of the same messages are not counted twice", () => {
+  const s = parseSessionFile(FIXTURE)!;
+  // The fixture writes every message to both streams, as a real rollout does.
+  assert.equal(s.userTurns, 1);
+  assert.equal(s.assistantTurns, 2);
+  assert.equal(s.thinkingBlocks, 1);
+  // Assistant replies stay out of the thinking preview.
+  assert.match(s.assistantPreview, /tests failed/);
+  assert.equal(s.thinkingPreview.includes("tests failed"), false);
+});
+
+test("codex: token usage comes from event_msg/token_count", () => {
+  const s = parseSessionFile(FIXTURE)!;
+  assert.equal(s.tokensIn, 1700);
+  assert.equal(s.tokensOut, 1000); // output 700 + reasoning 300
+  assert.equal(s.cacheReadTokens, 500);
+});
+
+test("codex: function_call/output are paired by call_id", () => {
+  const s = parseSessionFile(FIXTURE)!;
+  assert.deepEqual(s.toolsUsed, ["shell", "apply_patch"]);
+  assert.equal(s.toolCallCount, 2);
+  assert.equal(s.toolErrorCount, 1);
+  assert.equal(s.toolEvents.length, 2);
   assert.equal(s.toolEvents[0].name, "shell");
+  assert.equal(s.toolEvents[0].exitCode, 1);
+  assert.equal(s.toolEvents[0].error, true);
   assert.match(s.toolEvents[0].inputPreview, /npm test/);
+  assert.match(s.toolEvents[0].resultPreview, /42 passed/);
+  assert.equal(s.toolEvents[1].name, "apply_patch");
+  assert.equal(s.toolEvents[1].exitCode, null);
+  assert.equal(s.toolEvents[1].error, false);
+  assert.ok(s.langHints.includes("ts"));
 });
 
 test("codex: missing file returns null", () => {

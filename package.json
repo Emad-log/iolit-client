@@ -12,7 +12,7 @@
     "check:single-send": "node scripts/check-network.js"
   },
   "engines": {
-    "node": ">=20"
+    "node": ">=22.13"
   },
   "license": "MIT",
   "devDependencies": {

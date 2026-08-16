@@ -14,9 +14,16 @@ echo "Installing Iolit client ($VERSION)..."
 
 mkdir -p "$BIN_DIR" "$TMP_DIR"
 
-# Require node
+# Require node (node:sqlite needs 22.13+)
 if ! command -v node >/dev/null 2>&1; then
-  echo "Error: Node.js >= 20 required. Install it first: https://nodejs.org"
+  echo "Error: Node.js >= 22.13 required. Install it first: https://nodejs.org"
+  exit 1
+fi
+
+NODE_MAJOR="$(node -p 'process.versions.node.split(".")[0]')"
+NODE_MINOR="$(node -p 'process.versions.node.split(".")[1]')"
+if [ "$NODE_MAJOR" -lt 22 ] || { [ "$NODE_MAJOR" -eq 22 ] && [ "$NODE_MINOR" -lt 13 ]; }; then
+  echo "Error: Node.js >= 22.13 required (node:sqlite). Found $(node -v)."
   exit 1
 fi
 
