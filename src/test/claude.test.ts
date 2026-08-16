@@ -109,6 +109,27 @@ test("claude: trace keeps scrubbed tool args", () => {
   assert.equal(s.userPromptPreview, "");
 });
 
+test("claude: last-prompt fills the missing user turn", () => {
+  const s = parseClaudeSession(
+    [
+      JSON.stringify({
+        type: "assistant",
+        timestamp: "2026-04-13T11:35:03.572Z",
+        message: {
+          model: "claude-opus-4-6",
+          stop_reason: "end_turn",
+          usage: { input_tokens: 2, output_tokens: 8 },
+          content: [{ type: "text", text: "ok" }],
+        },
+      }),
+      JSON.stringify({ type: "last-prompt", lastPrompt: "fix the staging deploy", sessionId: "abc" }),
+    ].join("\n"),
+  );
+  assert.ok(s);
+  assert.equal(s.userTurns, 1);
+  assert.match(s.userPromptPreview, /fix the staging deploy/);
+});
+
 test("claude: raw keeps prompt and thinking, still scrubs paths", () => {
   const s = applyTier(parseClaudeSession(sample)!, "raw");
   assert.match(s.userPromptPreview, /deploy the staging/);

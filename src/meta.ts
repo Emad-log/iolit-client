@@ -1,4 +1,4 @@
-// Shared session defaults + coarse inference. Never copies free text or paths.
+// Shared defaults and coarse inference. No free text or paths.
 
 import { createHash } from "node:crypto";
 import type { SessionMeta, ToolCallStat, ToolName } from "./types.js";

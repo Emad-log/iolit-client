@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Iolit CLI: detect -> preview tiers -> approve -> send, plus `iolit history`.
+// Detect, preview tiers, approve, send. `iolit history` lists sent batches.
 
 import { findClaudeSessions } from "./detect.js";
 import { findCursorSessions } from "./detect-cursor.js";
@@ -27,8 +27,8 @@ async function submit() {
     return;
   }
 
-  const tools = [...new Set(sessions.map((s) => s.tool))].join(", ");
-  const types = [...new Set(sessions.map((s) => s.taskType))].join(", ");
+  const tools = Array.from(new Set(sessions.map((s) => s.tool))).join(", ");
+  const types = Array.from(new Set(sessions.map((s) => s.taskType))).join(", ");
   const events = sessions.reduce((a, s) => a + s.toolEvents.length, 0);
   const pulse = estimateUsd(sessions, "pulse");
   const trace = estimateUsd(sessions, "trace");
@@ -38,7 +38,7 @@ async function submit() {
   console.log("  Iolit, ready to submit a batch");
   console.log("  " + "-".repeat(36));
   console.log(`  Sessions:   ${sessions.length}  (${tools})`);
-  console.log(`  Models:     ${[...new Set(sessions.map((s) => s.model))].join(", ")}`);
+  console.log(`  Models:     ${Array.from(new Set(sessions.map((s) => s.model))).join(", ")}`);
   console.log(`  Task types: ${types}`);
   console.log(`  Tool events captured: ${events}`);
   console.log("");

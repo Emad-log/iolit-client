@@ -1,4 +1,4 @@
-// The only network call in the client. CI enforces single call site (scripts/check-network.js).
+// The only network call. CI fails if a second site appears.
 
 const DEFAULT_ENDPOINT = "https://iolit.dev/api/v1/batches";
 
