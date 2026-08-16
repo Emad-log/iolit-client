@@ -1,8 +1,12 @@
-// Cursor state.vscdb. Structured fields only.
+// Cursor chats live in globalStorage/state.vscdb, table cursorDiskKV:
+//   composerData:<id>          one chat, with fullConversationHeadersOnly
+//   bubbleId:<id>:<bubbleId>   one message: text, thinking, toolFormerData, tokenCount
+// Header type 1 is the user, type 2 is the assistant. Workspace folders come
+// from workspaceStorage/<hash>/workspace.json, keyed by composer id.
 
 import { readdirSync, existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import {
   applyToolMap,
@@ -16,77 +20,70 @@ import {
 import { EVENT_CAP, parseExitCode, preview, resultText, summarizeInput } from "./redact.js";
 import type { SessionMeta, ToolCallStat, ToolEvent } from "./types.js";
 
-const CONVERSATION_KEYS = [
-  "cursor-composer.conversations",
-  "cursor-conversations",
-  "conversations",
-  "aiService.prompts",
-];
+const USER = 1;
+const ASSISTANT = 2;
+
+// Bubbles read per chat. Turns are counted from every header, so this caps
+// only how much text and how many tool events we collect.
+const BUBBLE_CAP = 200;
+
+interface Header {
+  bubbleId: string;
+  type: number;
+}
+
+interface Composer {
+  id: string;
+  doc: Record<string, unknown>;
+  headers: Header[];
+  updatedAt: number;
+}
+
+// Text and tools gathered while walking one chat.
+interface Collected {
+  models: Set<string>;
+  langs: Set<string>;
+  calls: Map<string, ToolCallStat>;
+  seq: string[];
+  events: ToolEvent[];
+  user: string[];
+  assistant: string[];
+  thinking: string[];
+}
+
+function cursorDirs(name: string): string[] {
+  return [
+    join(homedir(), "Library", "Application Support", "Cursor", "User", name),
+    join(homedir(), ".config", "Cursor", "User", name),
+    join(homedir(), "AppData", "Roaming", "Cursor", "User", name),
+  ];
+}
 
 export function findCursorSessions(limit = 20): SessionMeta[] {
-  const dirs = [
-    join(homedir(), "Library", "Application Support", "Cursor", "User", "workspaceStorage"),
-    join(homedir(), ".config", "Cursor", "User", "workspaceStorage"),
-    join(homedir(), "AppData", "Roaming", "Cursor", "User", "workspaceStorage"),
-    join(homedir(), "Library", "Application Support", "Cursor", "User", "globalStorage"),
-    join(homedir(), ".config", "Cursor", "User", "globalStorage"),
-    join(homedir(), "AppData", "Roaming", "Cursor", "User", "globalStorage"),
-  ];
-
+  const folders = readWorkspaceFolders();
   const sessions: SessionMeta[] = [];
-  for (const dir of dirs) {
-    if (!existsSync(dir)) continue;
+  for (const dir of cursorDirs("globalStorage")) {
+    if (sessions.length >= limit) break;
     const dbPath = join(dir, "state.vscdb");
     if (existsSync(dbPath)) {
-      sessions.push(...readConversations(dbPath, limit - sessions.length));
-    }
-    try {
-      for (const workspace of readdirSync(dir)) {
-        if (sessions.length >= limit) break;
-        const nested = join(dir, workspace, "state.vscdb");
-        if (existsSync(nested)) {
-          sessions.push(...readConversations(nested, limit - sessions.length));
-        }
-      }
-    } catch {
-      // not a directory listing we can walk
+      sessions.push(...readConversations(dbPath, limit - sessions.length, folders));
     }
   }
   return sessions.slice(0, limit);
 }
 
-export function readConversations(dbPath: string, limit: number): SessionMeta[] {
+export function readConversations(
+  dbPath: string,
+  limit: number,
+  folders = new Map<string, string>(),
+): SessionMeta[] {
   let db: DatabaseSync | undefined;
   try {
-    db = new DatabaseSync(dbPath, { readOnly: true });
-    const out: SessionMeta[] = [];
-    const cwdHint = workspaceCwd(dbPath);
-
-    const named = db
-      .prepare(`SELECT key, value FROM ItemTable WHERE key IN (${CONVERSATION_KEYS.map(() => "?").join(",")})`)
-      .all(...CONVERSATION_KEYS) as { key: string; value: string }[];
-    for (const row of named) {
-      for (const conv of parseConversations(row.value, cwdHint)) {
-        if (out.length >= limit) return out;
-        out.push(conv);
-      }
-    }
-
-    if (out.length < limit) {
-      try {
-        const kv = db
-          .prepare("SELECT key, value FROM cursorDiskKV WHERE key LIKE 'composerData:%' LIMIT 40")
-          .all() as { key: string; value: string }[];
-        for (const row of kv) {
-          if (out.length >= limit) break;
-          const parsed = parseComposerDoc(row.value, cwdHint);
-          if (parsed) out.push(parsed);
-        }
-      } catch {
-        // older dbs have no cursorDiskKV
-      }
-    }
-    return out;
+    const conn = new DatabaseSync(dbPath, { readOnly: true });
+    db = conn;
+    return listComposers(conn)
+      .slice(0, limit)
+      .map((c) => mapComposer(conn, c, folders.get(c.id) ?? ""));
   } catch {
     return [];
   } finally {
@@ -94,65 +91,69 @@ export function readConversations(dbPath: string, limit: number): SessionMeta[] 
   }
 }
 
-function workspaceCwd(dbPath: string): string {
+// Newest first, skipping drafts that hold no messages.
+function listComposers(db: DatabaseSync): Composer[] {
+  const prefix = "composerData:";
+  let rows: { key: string; value: string }[];
   try {
-    const raw = readFileSync(join(dirname(dbPath), "workspace.json"), "utf8");
-    const data = JSON.parse(raw) as { folder?: string };
-    return typeof data.folder === "string" ? data.folder : "";
-  } catch {
-    return "";
-  }
-}
-
-function parseConversations(raw: string, cwdHint: string): SessionMeta[] {
-  try {
-    const data = JSON.parse(raw) as Record<string, unknown>;
-    const list: unknown[] = Array.isArray(data)
-      ? data
-      : (data.conversations as unknown[]) ?? (data.composerThreads as unknown[]) ?? [];
-    return list
-      .filter((c): c is Record<string, unknown> => typeof c === "object" && c !== null)
-      .slice(0, 20)
-      .map((c) => mapConversation(c, cwdHint));
+    rows = db.prepare("SELECT key, value FROM cursorDiskKV WHERE key LIKE ?").all(prefix + "%") as {
+      key: string;
+      value: string;
+    }[];
   } catch {
     return [];
   }
-}
 
-function parseComposerDoc(raw: string, cwdHint: string): SessionMeta | null {
-  try {
-    const data = JSON.parse(raw) as Record<string, unknown>;
-    return mapConversation(data, cwdHint);
-  } catch {
-    return null;
+  const out: Composer[] = [];
+  for (const row of rows) {
+    const doc = parseRecord(row.value);
+    if (!doc) continue;
+    const headers = readHeaders(doc.fullConversationHeadersOnly);
+    if (headers.length === 0) continue;
+    out.push({
+      id: row.key.slice(prefix.length),
+      doc,
+      headers,
+      updatedAt: num(doc.lastUpdatedAt) || num(doc.createdAt),
+    });
   }
+  out.sort((a, b) => b.updatedAt - a.updatedAt);
+  return out;
 }
 
-function mapConversation(c: Record<string, unknown>, cwdHint: string): SessionMeta {
+function readHeaders(raw: unknown): Header[] {
+  if (!Array.isArray(raw)) return [];
+  const out: Header[] = [];
+  for (const item of raw) {
+    const h = asRecord(item);
+    if (!h) continue;
+    const bubbleId = pickString(h, ["bubbleId"]);
+    if (bubbleId) out.push({ bubbleId, type: num(h.type) });
+  }
+  return out;
+}
+
+function mapComposer(db: DatabaseSync, c: Composer, folder: string): SessionMeta {
   const s = emptySession("cursor");
-  const models = new Set<string>();
-  const langs = new Set<string>();
-  const calls = new Map<string, ToolCallStat>();
-  const seq: string[] = [];
-  const events: ToolEvent[] = [];
-  const userParts: string[] = [];
-  const asstParts: string[] = [];
+  const got: Collected = {
+    models: new Set(),
+    langs: new Set(),
+    calls: new Map(),
+    seq: [],
+    events: [],
+    user: [],
+    assistant: [],
+    thinking: [],
+  };
 
   const model =
-    pickString(c, ["model", "modelName"]) ||
-    pickString(asRecord(c.modelConfig), ["modelName", "model"]) ||
-    pickString(asRecord(c.modelInfo), ["modelName", "model"]);
-  if (model) {
-    s.model = model;
-    models.add(model);
-  }
+    pickString(asRecord(c.doc.modelConfig), ["modelName", "model"]) || pickString(c.doc, ["model"]);
+  if (model) got.models.add(model);
 
-  const started = pickString(c, ["timestamp", "createdAt", "created_at"]);
-  const ended = pickString(c, ["lastUpdatedAt", "updatedAt", "endedAt"]);
-  if (started) s.startedAt = started;
-  if (ended) s.endedAt = ended;
+  s.startedAt = isoTime(c.doc.createdAt);
+  s.endedAt = isoTime(c.doc.lastUpdatedAt) || s.startedAt;
 
-  const git = asRecord(c.gitWorktree);
+  const git = asRecord(c.doc.gitWorktree);
   if (git) {
     s.hasGit = true;
     const branch = pickString(git, ["branchName", "branch"]);
@@ -160,109 +161,162 @@ function mapConversation(c: Record<string, unknown>, cwdHint: string): SessionMe
     const path = pickString(git, ["worktreePath", "path"]);
     if (path) s.cwdHash = shortHash(path);
   }
-  if (!s.cwdHash && cwdHint) s.cwdHash = shortHash(cwdHint);
-  if (c.isSubagent === true) s.isSubagent = true;
+  if (!s.cwdHash && folder) s.cwdHash = shortHash(folder);
+  if (c.doc.isBestOfNSubcomposer === true) s.isSubagent = true;
 
-  const bubbles = firstArray(c, ["bubbles", "messages", "conversation", "fullConversationHeadersOnly"]);
-  for (const item of bubbles) {
-    const b = asRecord(item);
-    if (!b) continue;
-    const role = (pickString(b, ["type", "role", "bubbleType"]) || "").toLowerCase();
-    if (role.includes("user") || role === "human") s.userTurns += 1;
-    if (role.includes("assistant") || role.includes("ai") || role === "bot") s.assistantTurns += 1;
-    const bubbleModel =
-      pickString(b, ["model", "modelName"]) ||
-      pickString(asRecord(b.modelInfo), ["modelName", "model"]);
-    if (bubbleModel) models.add(bubbleModel);
-    const text = pickString(b, ["text", "content", "richText"]);
-    if (text && (role.includes("user") || role === "human")) {
-      s.userCharsIn += text.length;
-      userParts.push(text);
-    }
-    if (text && (role.includes("assistant") || role.includes("ai"))) {
-      s.textCharsOut += text.length;
-      asstParts.push(text);
-    }
-    collectTools(b, langs, calls, seq, events);
-    noteUsage(s, b);
+  for (const h of c.headers) {
+    if (h.type === USER) s.userTurns += 1;
+    else if (h.type === ASSISTANT) s.assistantTurns += 1;
   }
 
-  collectTools(c, langs, calls, seq, events);
-  noteUsage(s, c);
-  if (models.size > 0) {
-    s.modelsUsed = Array.from(models);
-    if (s.model === "unknown") s.model = s.modelsUsed[0] ?? "unknown";
+  const stmt = db.prepare("SELECT value FROM cursorDiskKV WHERE key = ?");
+  for (const h of c.headers.slice(-BUBBLE_CAP)) {
+    const row = stmt.get(`bubbleId:${c.id}:${h.bubbleId}`) as { value: string } | undefined;
+    const bubble = row ? parseRecord(row.value) : null;
+    if (bubble) ingestBubble(s, got, bubble, h.type);
   }
-  if (s.userTurns === 0 && s.assistantTurns === 0 && bubbles.length === 0) {
-    s.userTurns = 1;
-    s.assistantTurns = 1;
+
+  if (got.models.size > 0) {
+    s.modelsUsed = Array.from(got.models);
+    s.model = s.modelsUsed[0] ?? "unknown";
   }
-  applyToolMap(s, calls);
-  s.toolEvents = events.slice(0, EVENT_CAP);
-  s.userPromptPreview = preview(userParts.join("\n"));
-  s.assistantPreview = preview(asstParts.join("\n"));
-  s.success = s.assistantTurns > 0 || s.toolCallCount > 0 || s.model !== "unknown";
-  return finishSession(s, seq, langs);
+  applyToolMap(s, got.calls);
+  s.toolEvents = got.events.slice(0, EVENT_CAP);
+  s.userPromptPreview = preview(got.user.join("\n"));
+  s.assistantPreview = preview(got.assistant.join("\n"));
+  s.thinkingPreview = preview(got.thinking.join("\n"));
+  s.success = s.assistantTurns > 0;
+  return finishSession(s, got.seq, got.langs);
 }
 
-function collectTools(
-  rec: Record<string, unknown>,
-  langs: Set<string>,
-  calls: Map<string, ToolCallStat>,
-  seq: string[],
-  events: ToolEvent[],
+function ingestBubble(
+  s: SessionMeta,
+  got: Collected,
+  b: Record<string, unknown>,
+  role: number,
 ): void {
-  const lists = [
-    rec.toolCalls,
-    rec.tool_calls,
-    rec.tools,
-    rec.actions,
-    asRecord(rec.capabilityType) ? [rec] : null,
-  ];
-  for (const list of lists) {
-    if (!Array.isArray(list)) continue;
-    for (const item of list) {
-      const t = asRecord(item);
-      if (!t) continue;
-      const name = pickString(t, ["name", "toolName", "tool", "type", "capabilityType"]);
-      if (!name) continue;
-      const errored = Boolean(t.isError || t.error);
-      bumpTool(calls, name, errored);
-      seq.push(name);
-      const input = asRecord(t.params) ?? asRecord(t.input) ?? asRecord(t.args);
-      if (input) {
-        for (const v of Object.values(input)) {
-          if (typeof v === "string") {
-            const ext = extHint(v);
-            if (ext) langs.add(ext);
-          }
-        }
+  const model = pickString(asRecord(b.modelInfo), ["modelName", "model"]);
+  if (model) got.models.add(model);
+
+  const text = pickString(b, ["text"]);
+  if (text && role === USER) {
+    s.userCharsIn += text.length;
+    got.user.push(text);
+  } else if (text && role === ASSISTANT) {
+    s.textCharsOut += text.length;
+    got.assistant.push(text);
+  }
+
+  const thinking = pickString(asRecord(b.thinking), ["text"]);
+  if (thinking) {
+    s.thinkingBlocks += 1;
+    s.thinkingChars += thinking.length;
+    got.thinking.push(thinking);
+  }
+
+  const tokens = asRecord(b.tokenCount);
+  if (tokens) {
+    s.tokensIn += num(tokens.inputTokens);
+    s.tokensOut += num(tokens.outputTokens);
+  }
+
+  const tool = asRecord(b.toolFormerData);
+  if (tool) ingestTool(got, tool);
+}
+
+function ingestTool(got: Collected, t: Record<string, unknown>): void {
+  const name = pickString(t, ["name"]) || "unknown";
+  const errored = pickString(t, ["status"]) === "error" || Boolean(t.error);
+  bumpTool(got.calls, name, errored);
+  got.seq.push(name);
+
+  const input = asRecord(t.params) ?? parseRecord(t.rawArgs);
+  if (input) {
+    for (const v of Object.values(input)) {
+      if (typeof v === "string") {
+        const ext = extHint(v);
+        if (ext) got.langs.add(ext);
       }
-      const result = t.result ?? t.output ?? t.error;
-      events.push({
-        name,
-        error: errored,
-        exitCode: parseExitCode(result),
-        argKeys: input ? Object.keys(input) : [],
-        inputPreview: preview(summarizeInput(input)),
-        resultPreview: preview(resultText(result)),
-      });
     }
   }
+
+  const result = t.result ?? t.error;
+  got.events.push({
+    name,
+    error: errored,
+    exitCode: parseExitCode(result),
+    argKeys: input ? Object.keys(input) : [],
+    inputPreview: preview(summarizeInput(input)),
+    resultPreview: preview(resultText(result)),
+  });
 }
 
-function noteUsage(s: SessionMeta, rec: Record<string, unknown>): void {
-  const usage = asRecord(rec.usage) ?? asRecord(rec.tokenUsage) ?? rec;
-  s.tokensIn += num(usage?.input_tokens ?? usage?.promptTokens ?? usage?.prompt_tokens);
-  s.tokensOut += num(usage?.output_tokens ?? usage?.completionTokens ?? usage?.completion_tokens);
-}
-
-function firstArray(rec: Record<string, unknown>, keys: string[]): unknown[] {
-  for (const k of keys) {
-    const v = rec[k];
-    if (Array.isArray(v)) return v;
+// composer.composerData in each workspace db lists the chats opened there.
+function readWorkspaceFolders(): Map<string, string> {
+  const folders = new Map<string, string>();
+  for (const dir of cursorDirs("workspaceStorage")) {
+    if (!existsSync(dir)) continue;
+    let workspaces: string[] = [];
+    try {
+      workspaces = readdirSync(dir);
+    } catch {
+      continue;
+    }
+    for (const ws of workspaces) {
+      const folder = readFolder(join(dir, ws, "workspace.json"));
+      if (!folder) continue;
+      for (const id of composerIds(join(dir, ws, "state.vscdb"))) folders.set(id, folder);
+    }
   }
-  return [];
+  return folders;
+}
+
+function readFolder(path: string): string {
+  try {
+    const data = JSON.parse(readFileSync(path, "utf8")) as { folder?: string };
+    return typeof data.folder === "string" ? data.folder : "";
+  } catch {
+    return "";
+  }
+}
+
+function composerIds(dbPath: string): string[] {
+  if (!existsSync(dbPath)) return [];
+  let db: DatabaseSync | undefined;
+  try {
+    db = new DatabaseSync(dbPath, { readOnly: true });
+    const row = db.prepare("SELECT value FROM ItemTable WHERE key = ?").get("composer.composerData") as
+      | { value: string }
+      | undefined;
+    const doc = row ? parseRecord(row.value) : null;
+    if (!doc || !Array.isArray(doc.allComposers)) return [];
+    return doc.allComposers
+      .map((c) => pickString(asRecord(c), ["composerId"]))
+      .filter((id) => id !== "");
+  } catch {
+    return [];
+  } finally {
+    db?.close();
+  }
+}
+
+function isoTime(v: unknown): string {
+  if (typeof v === "string") return v;
+  const ms = num(v);
+  return ms > 0 ? new Date(ms).toISOString() : "";
+}
+
+// The value column is declared BLOB, so some rows come back as bytes.
+function parseRecord(raw: unknown): Record<string, unknown> | null {
+  let text = "";
+  if (typeof raw === "string") text = raw;
+  else if (raw instanceof Uint8Array) text = new TextDecoder().decode(raw);
+  if (!text) return null;
+  try {
+    return asRecord(JSON.parse(text));
+  } catch {
+    return null;
+  }
 }
 
 function pickString(rec: Record<string, unknown> | null, keys: string[]): string {

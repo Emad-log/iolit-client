@@ -116,9 +116,9 @@ export function applyToolMap(s: SessionMeta, calls: Map<string, ToolCallStat>): 
 export function inferTaskType(s: SessionMeta): string {
   if (s.isSubagent) return "agent";
   if (s.toolErrorCount >= 3 && s.toolCallCount > 0 && s.toolErrorCount >= s.toolCallCount) return "debug";
-  const writes = countNames(s, ["edit", "write", "applypatch", "strreplace", "create_file"]);
-  const reads = countNames(s, ["read", "grep", "glob", "search", "semanticsearch"]);
-  const bash = countNames(s, ["bash", "shell", "run_terminal_cmd"]);
+  const writes = countNames(s, ["edit", "write", "patch", "replace", "create_file"]);
+  const reads = countNames(s, ["read", "grep", "glob", "search"]);
+  const bash = countNames(s, ["bash", "shell", "terminal"]);
   const agents = countNames(s, ["agent", "task"]);
   if (agents > 0 && agents >= writes + reads + bash) return "agent";
   if (writes > 0) return "code";
@@ -129,9 +129,11 @@ export function inferTaskType(s: SessionMeta): string {
   return "unknown";
 }
 
+// Substring match: real tools are named read_file_v2, shell_command,
+// run_terminal_command_v2, not the bare verb.
 function countNames(s: SessionMeta, names: string[]): number {
   return s.toolCalls
-    .filter((t) => names.includes(t.name.toLowerCase()))
+    .filter((t) => names.some((n) => t.name.toLowerCase().includes(n)))
     .reduce((a, t) => a + t.count, 0);
 }
 

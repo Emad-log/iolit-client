@@ -1,9 +1,12 @@
 // Codex JSONL under ~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl.
 // Real rollout shape (v0.115+ / v0.130): top-level events are session_meta,
 // response_item, event_msg, turn_context. Token usage lives in
-// event_msg/token_count (cumulative total_token_usage), the model is in
-// turn_context, and reasoning text is in event_msg/agent_message (plus
-// response_item/reasoning on some builds).
+// event_msg/token_count (cumulative total_token_usage) and the model is in
+// turn_context.
+//
+// A rollout writes each message twice: once as a response_item and once as an
+// event_msg. Count the response_item stream and fall back to event_msg only
+// when it is empty, or every turn lands in the payload twice.
 
 import { readdirSync, readFileSync, existsSync, statSync } from "node:fs";
 import { homedir } from "node:os";
@@ -76,9 +79,12 @@ export function parseSessionFile(path: string): SessionMeta | null {
   const seq: string[] = [];
   const events: ToolEvent[] = [];
   const byCallId = new Map<string, ToolEvent>();
-  const userParts: string[] = [];
-  const asstParts: string[] = [];
-  const thinkParts: string[] = [];
+  const itemUser = newStream();
+  const itemAsst = newStream();
+  const itemThink = newStream();
+  const eventUser = newStream();
+  const eventAsst = newStream();
+  const eventThink = newStream();
   let sawContent = false;
 
   for (const line of raw.split("\n").filter(Boolean)) {
@@ -100,18 +106,21 @@ export function parseSessionFile(path: string): SessionMeta | null {
     } else if (entry.type === "event_msg") {
       if (kind === "token_count") {
         ingestTokenCount(s, payload);
-      } else if (kind === "agent_message") {
-        sawContent = true;
-        ingestThinking(s, payload.message ?? payload.content, thinkParts);
       } else if (kind === "user_message") {
         sawContent = true;
-        ingestUserMessage(s, payload, userParts);
+        addTurn(eventUser, contentText(payload.message ?? payload.content));
+      } else if (kind === "agent_message") {
+        sawContent = true;
+        addTurn(eventAsst, contentText(payload.message ?? payload.content));
+      } else if (kind === "agent_reasoning") {
+        sawContent = true;
+        addThinking(eventThink, contentText(payload.text ?? payload.content));
       }
       // task_started / task_complete / turn_aborted: no structured fields
     } else if (entry.type === "response_item") {
       if (kind === "message") {
         sawContent = true;
-        ingestMessage(s, payload, models, userParts, asstParts);
+        ingestMessage(payload, models, itemUser, itemAsst);
       } else if (kind === "function_call") {
         sawContent = true;
         ingestFunctionCall(payload, calls, seq, events, byCallId, langs);
@@ -120,7 +129,10 @@ export function parseSessionFile(path: string): SessionMeta | null {
         ingestFunctionOutput(payload, calls, byCallId);
       } else if (kind === "reasoning") {
         sawContent = true;
-        ingestThinking(s, payload.summary ?? payload.content, thinkParts);
+        addThinking(itemThink, contentText(payload.summary ?? payload.content));
+      } else if (kind === "web_search_call") {
+        sawContent = true;
+        s.webSearchRequests += 1;
       }
       // custom_tool_call and others: ignored
     }
@@ -134,11 +146,49 @@ export function parseSessionFile(path: string): SessionMeta | null {
   }
   applyToolMap(s, calls);
   s.toolEvents = events.slice(0, EVENT_CAP);
-  s.userPromptPreview = preview(userParts.join("\n"));
-  s.assistantPreview = preview(asstParts.join("\n"));
-  s.thinkingPreview = preview(thinkParts.join("\n"));
+
+  const user = pickStream(itemUser, eventUser);
+  const assistant = pickStream(itemAsst, eventAsst);
+  const thinking = pickStream(itemThink, eventThink);
+  s.userTurns = user.count;
+  s.userCharsIn = user.chars;
+  s.assistantTurns = assistant.count;
+  s.textCharsOut = assistant.chars;
+  s.thinkingBlocks = thinking.count;
+  s.thinkingChars = thinking.chars;
+  s.userPromptPreview = preview(user.parts.join("\n"));
+  s.assistantPreview = preview(assistant.parts.join("\n"));
+  s.thinkingPreview = preview(thinking.parts.join("\n"));
+
   s.success = s.assistantTurns > 0 || s.tokensOut > 0;
   return finishSession(s, seq, langs);
+}
+
+// One side of a duplicated message stream.
+interface Stream {
+  count: number;
+  chars: number;
+  parts: string[];
+}
+
+function newStream(): Stream {
+  return { count: 0, chars: 0, parts: [] };
+}
+
+function addTurn(st: Stream, text: string): void {
+  st.count += 1;
+  if (!text) return;
+  st.chars += text.length;
+  st.parts.push(text);
+}
+
+function addThinking(st: Stream, text: string): void {
+  if (!text) return;
+  addTurn(st, text);
+}
+
+function pickStream(items: Stream, events: Stream): Stream {
+  return items.count > 0 ? items : events;
 }
 
 function ingestSessionMeta(s: SessionMeta, payload: Record<string, unknown>): void {
@@ -147,45 +197,17 @@ function ingestSessionMeta(s: SessionMeta, payload: Record<string, unknown>): vo
 }
 
 function ingestMessage(
-  s: SessionMeta,
   payload: Record<string, unknown>,
   models: Set<string>,
-  userParts: string[],
-  asstParts: string[],
+  user: Stream,
+  assistant: Stream,
 ): void {
   const role = typeof payload.role === "string" ? payload.role : "";
   if (typeof payload.model === "string" && payload.model) models.add(payload.model);
   const text = contentText(payload.content);
-  if (role === "user") {
-    s.userTurns += 1;
-    if (text) {
-      s.userCharsIn += text.length;
-      userParts.push(text);
-    }
-  } else if (role === "assistant") {
-    s.assistantTurns += 1;
-    if (text) {
-      s.textCharsOut += text.length;
-      asstParts.push(text);
-    }
-  }
+  if (role === "user") addTurn(user, text);
+  else if (role === "assistant") addTurn(assistant, text);
   // role "developer" (system prompt) is intentionally not counted
-}
-
-function ingestUserMessage(s: SessionMeta, payload: Record<string, unknown>, userParts: string[]): void {
-  const text = typeof payload.message === "string" ? payload.message : contentText(payload.content);
-  if (!text) return;
-  s.userTurns += 1;
-  s.userCharsIn += text.length;
-  userParts.push(text);
-}
-
-function ingestThinking(s: SessionMeta, raw: unknown, thinkParts: string[]): void {
-  const text = contentText(raw);
-  if (!text) return;
-  s.thinkingBlocks += 1;
-  s.thinkingChars += text.length;
-  thinkParts.push(text);
 }
 
 function ingestFunctionCall(
