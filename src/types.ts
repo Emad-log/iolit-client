@@ -1,6 +1,6 @@
 // Public payload schema. If a field isn't here, the client never sends it.
 
-export type ToolName = "claude" | "cursor" | "codex";
+export type ToolName = "claude" | "cursor" | "codex" | "hermes";
 export type ShareTier = "pulse" | "trace" | "raw";
 
 export interface ToolCallStat {

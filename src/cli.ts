@@ -4,6 +4,7 @@
 import { findClaudeSessions } from "./detect.js";
 import { findCursorSessions } from "./detect-cursor.js";
 import { findCodexSessions } from "./detect-codex.js";
+import { findHermesSessions } from "./detect-hermes.js";
 import { buildPayload, hasSessions } from "./payload.js";
 import { send } from "./send.js";
 import { recordSent, readHistory } from "./history.js";
@@ -16,6 +17,7 @@ async function collectSessions() {
     ...(await findClaudeSessions()),
     ...findCursorSessions(),
     ...findCodexSessions(),
+    ...(await findHermesSessions()),
   ];
 }
 
