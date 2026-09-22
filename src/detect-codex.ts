@@ -20,18 +20,23 @@ import {
   shortHash,
 } from "./meta.js";
 import { EVENT_CAP, parseExitCode, preview, resultText, summarizeInput } from "./redact.js";
+import { collectCommits } from "./provenance.js";
 import type { SessionMeta, ToolCallStat, ToolEvent } from "./types.js";
 
 const SESSIONS_DIR = join(homedir(), ".codex", "sessions");
 const MAX_FILE_BYTES = 2_000_000;
 
-export function findCodexSessions(limit = 20): SessionMeta[] {
+export async function findCodexSessions(limit = 20): Promise<SessionMeta[]> {
   if (!existsSync(SESSIONS_DIR)) return [];
-  return listJsonl(SESSIONS_DIR)
+  const files = listJsonl(SESSIONS_DIR)
     .sort((a, b) => b.mtime - a.mtime)
-    .slice(0, limit)
-    .map((f) => parseSessionFile(f.path))
-    .filter((s): s is SessionMeta => s !== null);
+    .slice(0, limit);
+  const sessions: SessionMeta[] = [];
+  for (const f of files) {
+    const s = await parseSessionFile(f.path);
+    if (s) sessions.push(s);
+  }
+  return sessions;
 }
 
 function listJsonl(dir: string): { path: string; mtime: number }[] {
@@ -55,7 +60,7 @@ function listJsonl(dir: string): { path: string; mtime: number }[] {
   return out;
 }
 
-export function parseSessionFile(path: string): SessionMeta | null {
+export async function parseSessionFile(path: string): Promise<SessionMeta | null> {
   let st;
   try {
     st = statSync(path);
@@ -86,6 +91,7 @@ export function parseSessionFile(path: string): SessionMeta | null {
   const eventAsst = newStream();
   const eventThink = newStream();
   let sawContent = false;
+  let cwd = "";
 
   for (const line of raw.split("\n").filter(Boolean)) {
     let entry: Record<string, unknown>;
@@ -101,6 +107,7 @@ export function parseSessionFile(path: string): SessionMeta | null {
 
     if (entry.type === "session_meta") {
       ingestSessionMeta(s, payload);
+      if (!cwd && typeof payload.cwd === "string") cwd = payload.cwd;
     } else if (entry.type === "turn_context") {
       if (typeof payload.model === "string" && payload.model) models.add(payload.model);
     } else if (entry.type === "event_msg") {
@@ -161,7 +168,18 @@ export function parseSessionFile(path: string): SessionMeta | null {
   s.thinkingPreview = preview(thinking.parts.join("\n"));
 
   s.success = s.assistantTurns > 0 || s.tokensOut > 0;
-  return finishSession(s, seq, langs);
+  const done = finishSession(s, seq, langs);
+
+  // Provenance: bind commits made in the session repo during its window,
+  // like the Claude and Hermes detectors do. Only SHAs leave the machine.
+  if (cwd) {
+    const commits = await collectCommits(cwd, done.startedAt, done.endedAt);
+    if (commits.length > 0) {
+      done.hasGit = true;
+      done.provenance.commits = commits;
+    }
+  }
+  return done;
 }
 
 // One side of a duplicated message stream.

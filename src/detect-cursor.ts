@@ -18,6 +18,7 @@ import {
   shortHash,
 } from "./meta.js";
 import { EVENT_CAP, parseExitCode, preview, resultText, summarizeInput } from "./redact.js";
+import { collectCommits } from "./provenance.js";
 import type { SessionMeta, ToolCallStat, ToolEvent } from "./types.js";
 
 const USER = 1;
@@ -59,31 +60,34 @@ function cursorDirs(name: string): string[] {
   ];
 }
 
-export function findCursorSessions(limit = 20): SessionMeta[] {
+export async function findCursorSessions(limit = 20): Promise<SessionMeta[]> {
   const folders = readWorkspaceFolders();
   const sessions: SessionMeta[] = [];
   for (const dir of cursorDirs("globalStorage")) {
     if (sessions.length >= limit) break;
     const dbPath = join(dir, "state.vscdb");
     if (existsSync(dbPath)) {
-      sessions.push(...readConversations(dbPath, limit - sessions.length, folders));
+      sessions.push(...(await readConversations(dbPath, limit - sessions.length, folders)));
     }
   }
   return sessions.slice(0, limit);
 }
 
-export function readConversations(
+export async function readConversations(
   dbPath: string,
   limit: number,
   folders = new Map<string, string>(),
-): SessionMeta[] {
+): Promise<SessionMeta[]> {
   let db: DatabaseSync | undefined;
   try {
     const conn = new DatabaseSync(dbPath, { readOnly: true });
     db = conn;
-    return listComposers(conn)
-      .slice(0, limit)
-      .map((c) => mapComposer(conn, c, folders.get(c.id) ?? ""));
+    const composers = listComposers(conn).slice(0, limit);
+    const out: SessionMeta[] = [];
+    for (const c of composers) {
+      out.push(await mapComposer(conn, c, folders.get(c.id) ?? ""));
+    }
+    return out;
   } catch {
     return [];
   } finally {
@@ -133,7 +137,7 @@ function readHeaders(raw: unknown): Header[] {
   return out;
 }
 
-function mapComposer(db: DatabaseSync, c: Composer, folder: string): SessionMeta {
+async function mapComposer(db: DatabaseSync, c: Composer, folder: string): Promise<SessionMeta> {
   const s = emptySession("cursor");
   const got: Collected = {
     models: new Set(),
@@ -154,12 +158,16 @@ function mapComposer(db: DatabaseSync, c: Composer, folder: string): SessionMeta
   s.endedAt = isoTime(c.doc.lastUpdatedAt) || s.startedAt;
 
   const git = asRecord(c.doc.gitWorktree);
+  let repoDir = folder;
   if (git) {
     s.hasGit = true;
     const branch = pickString(git, ["branchName", "branch"]);
     if (branch) s.branchClass = classifyBranch(branch);
     const path = pickString(git, ["worktreePath", "path"]);
-    if (path) s.cwdHash = shortHash(path);
+    if (path) {
+      s.cwdHash = shortHash(path);
+      repoDir = path;
+    }
   }
   if (!s.cwdHash && folder) s.cwdHash = shortHash(folder);
   if (c.doc.isBestOfNSubcomposer === true) s.isSubagent = true;
@@ -186,7 +194,18 @@ function mapComposer(db: DatabaseSync, c: Composer, folder: string): SessionMeta
   s.assistantPreview = preview(got.assistant.join("\n"));
   s.thinkingPreview = preview(got.thinking.join("\n"));
   s.success = s.assistantTurns > 0;
-  return finishSession(s, got.seq, got.langs);
+  const done = finishSession(s, got.seq, got.langs);
+
+  // Provenance: bind commits made in the session repo during its window,
+  // like the Claude and Hermes detectors do. Only SHAs leave the machine.
+  if (repoDir) {
+    const commits = await collectCommits(repoDir, done.startedAt, done.endedAt);
+    if (commits.length > 0) {
+      done.hasGit = true;
+      done.provenance.commits = commits;
+    }
+  }
+  return done;
 }
 
 function ingestBubble(

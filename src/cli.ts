@@ -15,8 +15,8 @@ import { ask, closePrompts } from "./prompt.js";
 async function collectSessions() {
   return [
     ...(await findClaudeSessions()),
-    ...findCursorSessions(),
-    ...findCodexSessions(),
+    ...(await findCursorSessions()),
+    ...(await findCodexSessions()),
     ...(await findHermesSessions()),
   ];
 }
