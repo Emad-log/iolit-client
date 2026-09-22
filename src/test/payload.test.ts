@@ -42,6 +42,7 @@ export const session: SessionMeta = {
   cwdHash: "abc123abc123",
   hasGit: true,
   branchClass: "main",
+  provenance: { commits: ["a".repeat(40)] },
   langHints: ["ts"],
   permissionMode: "",
   stopReasons: [{ reason: "end_turn", count: 1 }],
