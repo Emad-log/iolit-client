@@ -9,8 +9,7 @@ import { send } from "./send.js";
 import { recordSent, readHistory } from "./history.js";
 import { estimateUsd, isShareTier } from "./tiers.js";
 import type { ShareTier } from "./types.js";
-import { createInterface } from "node:readline/promises";
-import { stdin, stdout } from "node:process";
+import { ask, closePrompts } from "./prompt.js";
 
 async function collectSessions() {
   return [
@@ -52,14 +51,13 @@ async function submit() {
   console.log("  Estimates unverified. Buyers set the real price.");
   console.log("");
 
-  const rl = createInterface({ input: stdin, output: stdout });
-  const pick = (await rl.question("  Tier? (pulse/trace/raw, default pulse) ")).trim().toLowerCase();
+  const pick = (await ask("  Tier? (pulse/trace/raw, default pulse) ")).trim().toLowerCase();
   const tier: ShareTier = isShareTier(pick) ? pick : "pulse";
 
   if (tier === "raw") {
-    const confirm = (await rl.question("  RAW includes prompts and code. Type YES to continue: ")).trim();
+    const confirm = (await ask("  RAW includes prompts and code. Type YES to continue: ")).trim();
     if (confirm !== "YES") {
-      rl.close();
+      closePrompts();
       console.log("  Cancelled. Nothing was sent.");
       return;
     }
@@ -67,7 +65,7 @@ async function submit() {
 
   const payload = buildPayload(sessions, tier);
   if (!hasSessions(payload)) {
-    rl.close();
+    closePrompts();
     console.log("No sessions found. Nothing to send.");
     return;
   }
@@ -75,8 +73,8 @@ async function submit() {
   const kb = Math.max(1, Math.round(JSON.stringify(payload).length / 1024));
   const est = estimateUsd(sessions, tier);
   console.log(`  Selected: ${tier}  ~${kb} KB  est $${est.toFixed(2)}`);
-  const answer = await rl.question("  Submit this batch? (y/N) ");
-  rl.close();
+  const answer = await ask("  Submit this batch? (y/N) ");
+  closePrompts();
 
   if (answer.trim().toLowerCase() !== "y") {
     console.log("  Cancelled. Nothing was sent.");
