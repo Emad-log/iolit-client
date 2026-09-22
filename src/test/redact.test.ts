@@ -14,3 +14,20 @@ test("preview scrubs unix paths", () => {
   assert.equal(out.includes("/home/ubuntu"), false);
   assert.match(out, /app\.ts/);
 });
+
+test("redactSecrets catches unknown high-entropy tokens", () => {
+  const key = "sk-proj-Ab3xYz9QwErTy8UiOp7AsDf6GhJk5LzXc4VbNm";
+  const out = redactSecrets(`my key is ${key} ok`);
+  assert.equal(out.includes(key), false);
+  assert.match(out, /\[redacted\]/);
+});
+
+test("redactSecrets leaves git SHAs, UUIDs, and words alone", () => {
+  const sha = "f9f0748a3b2c1d4e5f6a7b8c9d0e1f2a3b4c5d6e7";
+  const uuid = "550e8400-e29b-41d4-a716-446655440000";
+  const out = redactSecrets(`commit ${sha} id ${uuid} internationalization`);
+  assert.ok(out.includes(sha));
+  assert.ok(out.includes(uuid));
+  assert.ok(out.includes("internationalization"));
+  assert.equal(out.includes("[redacted]"), false);
+});

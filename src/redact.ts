@@ -3,15 +3,37 @@
 const SECRET_RE =
   /(?:sk-ant-[A-Za-z0-9_-]+|ghp_[A-Za-z0-9]+|github_pat_[A-Za-z0-9_]+|cfut_[A-Za-z0-9]+|cfk_[A-Za-z0-9]+|cfat_[A-Za-z0-9]+|dsk_[A-Za-z0-9]+|Bearer\s+[A-Za-z0-9._\-]+|AKIA[0-9A-Z]{16})/g;
 
+// Backstop for key formats the denylist doesn't know: a long run of
+// token-like characters with high Shannon entropy per character.
+// Random base62/base64 tokens sit at ~5.0+; git SHAs and UUIDs top out
+// near 4.0, English words and identifiers lower. Errs toward redacting:
+// a false positive costs a scrubbed hash in training data, a false
+// negative leaks a live credential.
+const TOKEN_RUN_RE = /[A-Za-z0-9_\-+~=.]{20,}/g;
+const ENTROPY_THRESHOLD = 4.3;
+
+function shannonPerChar(s: string): number {
+  const freq = new Map<string, number>();
+  for (const ch of s) freq.set(ch, (freq.get(ch) ?? 0) + 1);
+  let h = 0;
+  for (const count of freq.values()) {
+    const p = count / s.length;
+    h -= p * Math.log2(p);
+  }
+  return h;
+}
+
+export function redactSecrets(text: string): string {
+  return text
+    .replace(SECRET_RE, "[redacted]")
+    .replace(TOKEN_RUN_RE, (m) => (shannonPerChar(m) >= ENTROPY_THRESHOLD ? "[redacted]" : m));
+}
+
 const UNIX_PATH_RE = /(?:\/[\w.+@-]+){2,}/g;
 const WIN_PATH_RE = /[A-Za-z]:\\(?:[^\s\\]+\\)+[^\s\\]+/g;
 
 export const PREVIEW_CAP = 240;
 export const EVENT_CAP = 80;
-
-export function redactSecrets(text: string): string {
-  return text.replace(SECRET_RE, "[redacted]");
-}
 
 export function scrubPaths(text: string): string {
   return text
