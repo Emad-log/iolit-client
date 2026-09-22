@@ -13,6 +13,7 @@ import {
   shortHash,
 } from "./meta.js";
 import { EVENT_CAP, parseExitCode, preview, summarizeInput } from "./redact.js";
+import { collectCommits } from "./provenance.js";
 import type { SessionMeta, StopReasonStat, ToolCallStat, ToolEvent } from "./types.js";
 
 export async function findClaudeSessions(limit = 20): Promise<SessionMeta[]> {
@@ -28,10 +29,19 @@ export async function findClaudeSessions(limit = 20): Promise<SessionMeta[]> {
   const sessions: SessionMeta[] = [];
   for (const file of files) {
     if (sessions.length >= limit) break;
-    const meta = await readSessionFile(file.path);
-    if (meta && isUseful(meta)) sessions.push(meta);
+    const found = await readSessionFile(file.path);
+    if (found && isUseful(found.meta)) {
+      await attachProvenance(found.meta, found.cwd);
+      sessions.push(found.meta);
+    }
   }
   return sessions;
+}
+
+/** Best-effort: bind the session to git commits made during its window. */
+async function attachProvenance(s: SessionMeta, cwd: string): Promise<void> {
+  if (!s.hasGit || !cwd) return;
+  s.provenance.commits = await collectCommits(cwd, s.startedAt, s.endedAt);
 }
 
 async function walkJsonl(dir: string, out: { path: string; mtime: number }[]): Promise<void> {
@@ -47,12 +57,32 @@ async function walkJsonl(dir: string, out: { path: string; mtime: number }[]): P
   }
 }
 
-export async function readSessionFile(path: string): Promise<SessionMeta | null> {
+export async function readSessionFile(path: string): Promise<{ meta: SessionMeta; cwd: string } | null> {
   const st = await stat(path).catch(() => null);
   if (!st || st.size > 2_000_000) return null;
   const raw = await readFile(path, "utf8").catch(() => null);
   if (!raw) return null;
-  return parseClaudeSession(raw, path);
+  const found = parseClaudeSessionWithCwd(raw, path);
+  if (!found.meta) return null;
+  return { meta: found.meta, cwd: found.cwd };
+}
+
+/** Parse plus the raw cwd (kept out of SessionMeta; only its hash is stored). */
+export function parseClaudeSessionWithCwd(raw: string, path = ""): { meta: SessionMeta | null; cwd: string } {
+  const meta = parseClaudeSession(raw, path);
+  if (!meta) return { meta: null, cwd: "" };
+  return { meta, cwd: extractCwd(raw) };
+}
+
+/** First "cwd" value in the raw JSONL. Never leaves the machine. */
+function extractCwd(raw: string): string {
+  const m = raw.match(/"cwd"\s*:\s*"((?:[^"\\]|\\.)*)"/);
+  if (!m) return "";
+  try {
+    return JSON.parse(`"${m[1]}"`);
+  } catch {
+    return "";
+  }
 }
 
 export function parseClaudeSession(raw: string, path = ""): SessionMeta | null {

@@ -23,6 +23,12 @@ export interface ToolEvent {
   resultPreview: string;
 }
 
+export interface Provenance {
+  // Commit SHAs authored in the session's repo during the session window.
+  // No paths, remotes, or messages ever leave the machine, only SHAs.
+  commits: string[];
+}
+
 export interface SessionMeta {
   tool: ToolName;
   model: string;
@@ -61,6 +67,7 @@ export interface SessionMeta {
   cwdHash: string;
   hasGit: boolean;
   branchClass: string;
+  provenance: Provenance;
   langHints: string[];
   permissionMode: string;
   stopReasons: StopReasonStat[];
@@ -89,7 +96,7 @@ export const SESSION_KEYS = [
   "taskType", "success", "lastStopReason", "apiErrorCount",
   "toolErrorCount", "toolCallCount", "toolsUsed", "toolCalls", "toolSequence",
   "thinkingBlocks", "thinkingChars", "textCharsOut", "userCharsIn",
-  "isSubagent", "cwdHash", "hasGit", "branchClass", "langHints",
+  "isSubagent", "cwdHash", "hasGit", "branchClass", "provenance", "langHints",
   "permissionMode", "stopReasons",
   "shareTier", "toolEvents", "userPromptPreview", "assistantPreview", "thinkingPreview",
 ] as const;

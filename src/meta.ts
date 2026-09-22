@@ -44,6 +44,7 @@ export function emptySession(tool: ToolName): SessionMeta {
     cwdHash: "",
     hasGit: false,
     branchClass: "unknown",
+    provenance: { commits: [] },
     langHints: [],
     permissionMode: "",
     stopReasons: [],

@@ -30,6 +30,8 @@ async function submit() {
   const tools = Array.from(new Set(sessions.map((s) => s.tool))).join(", ");
   const types = Array.from(new Set(sessions.map((s) => s.taskType))).join(", ");
   const events = sessions.reduce((a, s) => a + s.toolEvents.length, 0);
+  const withProof = sessions.filter((s) => s.provenance.commits.length > 0).length;
+  const proofShas = sessions.reduce((a, s) => a + s.provenance.commits.length, 0);
   const pulse = estimateUsd(sessions, "pulse");
   const trace = estimateUsd(sessions, "trace");
   const raw = estimateUsd(sessions, "raw");
@@ -41,6 +43,7 @@ async function submit() {
   console.log(`  Models:     ${Array.from(new Set(sessions.map((s) => s.model))).join(", ")}`);
   console.log(`  Task types: ${types}`);
   console.log(`  Tool events captured: ${events}`);
+  console.log(`  Provenance: ${withProof}/${sessions.length} sessions with commit SHAs (${proofShas} total)`);
   console.log("");
   console.log("  Share more, get paid more. Pick a tier.");
   console.log(`  pulse  stats only                         est $${pulse.toFixed(2)}`);

@@ -42,6 +42,16 @@ node dist/cli.js
 
 The schema is `src/types.ts`. Higher tiers pay more (4x / 12x the pulse estimate). Estimates are unverified.
 
+## Provenance
+
+Every session with git activity is bound to the commits made during its
+window. The client runs `git log` locally and attaches up to 20 commit
+SHAs to the batch. Only SHAs leave the machine: no paths, remotes,
+branch names, or messages. The API rejects malformed SHAs and flags
+SHAs that appear in other sellers' batches, so buyers can tell real
+work from farmed sessions. Included at all tiers; it is verification
+metadata, not session content.
+
 ## Build & test
 
 ```sh

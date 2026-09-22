@@ -33,6 +33,7 @@ export function applyTier(session: SessionMeta, tier: ShareTier): SessionMeta {
     toolSequence: [...session.toolSequence],
     langHints: [...session.langHints],
     stopReasons: session.stopReasons.map((r) => ({ ...r })),
+    provenance: { commits: [...session.provenance.commits] },
     shareTier: tier,
     toolEvents: [],
     userPromptPreview: "",
