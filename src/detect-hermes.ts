@@ -18,6 +18,11 @@ import type { SessionMeta, ToolCallStat, ToolEvent } from "./types.js";
 
 const DEFAULT_LIMIT = 20;
 
+// Bound the per-session read: the gateway's sessions can be long-lived,
+// and every message is walked to build previews. Other detectors cap
+// files at 2MB / bubbles at 200; this is the Hermes equivalent.
+const MESSAGE_CAP = 2000;
+
 interface HermesSessionRow {
   id: string;
   source: string | null;
@@ -102,9 +107,9 @@ async function readHermesSession(db: DatabaseSync, row: HermesSessionRow): Promi
     messages = db
       .prepare(
         `SELECT role, content, tool_name, timestamp, finish_reason, reasoning
-         FROM messages WHERE session_id = ? ORDER BY timestamp ASC`,
+         FROM messages WHERE session_id = ? ORDER BY timestamp ASC LIMIT ?`,
       )
-      .all(row.id) as unknown as HermesMessageRow[];
+      .all(row.id, MESSAGE_CAP) as unknown as HermesMessageRow[];
   } catch {
     return null;
   }

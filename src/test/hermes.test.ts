@@ -101,3 +101,41 @@ test("hermes: missing db returns no sessions", async () => {
   const sessions = await findHermesSessions(20, "/tmp/does-not-exist-xyz/state.db");
   assert.deepEqual(sessions, []);
 });
+
+test("hermes: message reads are capped per session", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "hermes-cap-"));
+  const path = join(dir, "state.db");
+  const db = new DatabaseSync(path);
+  db.exec(`
+    CREATE TABLE sessions (
+      id TEXT PRIMARY KEY, source TEXT, model TEXT,
+      started_at REAL NOT NULL, ended_at REAL,
+      input_tokens INTEGER DEFAULT 0, output_tokens INTEGER DEFAULT 0,
+      cache_read_tokens INTEGER DEFAULT 0, cache_write_tokens INTEGER DEFAULT 0,
+      cwd TEXT, git_branch TEXT, git_repo_root TEXT
+    );
+    CREATE TABLE messages (
+      id INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT NOT NULL,
+      role TEXT NOT NULL, content TEXT, tool_name TEXT,
+      timestamp REAL NOT NULL, finish_reason TEXT, reasoning TEXT
+    );
+  `);
+  const now = Date.now() / 1000;
+  db.prepare(
+    `INSERT INTO sessions (id, source, model, started_at, ended_at)
+     VALUES (?, ?, ?, ?, ?)`
+  ).run("cap1", "cli", "test-model", now - 600, now - 60);
+  const ins = db.prepare(
+    `INSERT INTO messages (session_id, role, content, timestamp)
+     VALUES (?, ?, ?, ?)`
+  );
+  // More messages than the per-session cap.
+  for (let i = 0; i < 2005; i++) {
+    ins.run("cap1", "user", `message ${i}`, now - 600 + i);
+  }
+  db.close();
+
+  const sessions = await findHermesSessions(20, path);
+  assert.equal(sessions.length, 1);
+  assert.equal(sessions[0].userTurns, 2000);
+});
