@@ -1,8 +1,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { execFileSync } from "node:child_process";
 import { DatabaseSync } from "node:sqlite";
 import { readConversations } from "../detect-cursor.js";
 import { applyTier } from "../tiers.js";
@@ -79,8 +80,8 @@ function makeDb(): string {
 
 const FIXTURE = makeDb();
 
-test("cursor: maps composers and bubbles to SessionMeta", () => {
-  const sessions = readConversations(FIXTURE, 10);
+test("cursor: maps composers and bubbles to SessionMeta", async () => {
+  const sessions = await readConversations(FIXTURE, 10);
   assert.equal(sessions.length, 2);
   const s = sessions[0];
   assert.equal(s.tool, "cursor");
@@ -98,14 +99,14 @@ test("cursor: maps composers and bubbles to SessionMeta", () => {
   assert.ok(s.startedAt.startsWith("2025-12-06"));
 });
 
-test("cursor: newest composer first, empty drafts skipped", () => {
-  const sessions = readConversations(FIXTURE, 10);
+test("cursor: newest composer first, empty drafts skipped", async () => {
+  const sessions = await readConversations(FIXTURE, 10);
   assert.equal(sessions[1].model, "gpt-5.4-medium");
   assert.equal(sessions.every((s) => s.userTurns + s.assistantTurns > 0), true);
 });
 
-test("cursor: tool calls come from toolFormerData", () => {
-  const s = readConversations(FIXTURE, 10)[0];
+test("cursor: tool calls come from toolFormerData", async () => {
+  const s = (await readConversations(FIXTURE, 10))[0];
   assert.deepEqual(s.toolsUsed.sort(), ["edit_file_v2", "run_terminal_command_v2"]);
   assert.equal(s.toolCallCount, 2);
   assert.equal(s.toolErrorCount, 1);
@@ -118,19 +119,55 @@ test("cursor: tool calls come from toolFormerData", () => {
   assert.ok(s.langHints.includes("ts"));
 });
 
-test("cursor: missing db returns empty", () => {
-  assert.deepEqual(readConversations("/nonexistent.vscdb", 10), []);
+test("cursor: missing db returns empty", async () => {
+  assert.deepEqual(await readConversations("/nonexistent.vscdb", 10), []);
 });
 
-test("cursor: pulse strips any collected events", () => {
-  const sessions = readConversations(FIXTURE, 10).map((s) => applyTier(s, "pulse"));
+test("cursor: pulse strips any collected events", async () => {
+  const sessions = (await readConversations(FIXTURE, 10)).map((s) => applyTier(s, "pulse"));
   for (const s of sessions) {
     assert.equal(s.toolEvents.length, 0);
     assert.equal(s.userPromptPreview, "");
   }
 });
 
-test("cursor: raw keeps the prompt", () => {
-  const s = applyTier(readConversations(FIXTURE, 10)[0], "raw");
+test("cursor: raw keeps the prompt", async () => {
+  const s = applyTier((await readConversations(FIXTURE, 10))[0], "raw");
   assert.match(s.userPromptPreview, /fix the failing test/);
+});
+
+test("cursor: attaches commit provenance from the worktree path", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "iolit-cursor-prov-"));
+  try {
+    execFileSync("git", ["init", "-q"], { cwd: dir });
+    execFileSync("git", ["config", "user.email", "t@t"], { cwd: dir });
+    execFileSync("git", ["config", "user.name", "t"], { cwd: dir });
+    writeFileSync(join(dir, "a.txt"), "one");
+    execFileSync("git", ["add", "."], { cwd: dir });
+    execFileSync("git", ["commit", "-qm", "work"], { cwd: dir });
+    const sha = execFileSync("git", ["rev-parse", "HEAD"], { cwd: dir, encoding: "utf8" }).trim();
+
+    const dbPath = join(mkdtempSync(join(tmpdir(), "iolit-cursor-db-")), "state.vscdb");
+    const db = new DatabaseSync(dbPath);
+    db.exec("CREATE TABLE cursorDiskKV (key TEXT UNIQUE ON CONFLICT REPLACE, value BLOB)");
+    const put = db.prepare("INSERT INTO cursorDiskKV (key, value) VALUES (?, ?)");
+    const now = Date.now();
+    put.run("composerData:c1", JSON.stringify({
+      composerId: "c1",
+      createdAt: now - 60000,
+      lastUpdatedAt: now,
+      modelConfig: { modelName: "gpt-5.4-medium" },
+      gitWorktree: { branchName: "main", worktreePath: dir },
+      fullConversationHeadersOnly: [{ bubbleId: "b1", type: 1 }],
+    }));
+    put.run("bubbleId:c1:b1", JSON.stringify({ type: 1, text: "hello" }));
+    db.close();
+
+    const sessions = await readConversations(dbPath, 10);
+    assert.equal(sessions.length, 1);
+    assert.equal(sessions[0].hasGit, true);
+    assert.deepEqual(sessions[0].provenance.commits, [sha]);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
