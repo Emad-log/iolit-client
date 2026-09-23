@@ -1,15 +1,20 @@
 // Strip secrets and full paths from anything a higher tier may send.
 
+// Well-known prefixes worth catching explicitly: the entropy backstop
+// below can miss short or low-entropy-shaped live credentials (e.g. AWS
+// temporary keys are only 20 chars and score ~3.6 bits/char).
 const SECRET_RE =
-  /(?:sk-ant-[A-Za-z0-9_-]+|ghp_[A-Za-z0-9]+|github_pat_[A-Za-z0-9_]+|cfut_[A-Za-z0-9]+|cfk_[A-Za-z0-9]+|cfat_[A-Za-z0-9]+|dsk_[A-Za-z0-9]+|Bearer\s+[A-Za-z0-9._\-]+|AKIA[0-9A-Z]{16})/g;
+  /(?:sk-ant-[A-Za-z0-9_-]+|ghp_[A-Za-z0-9]+|github_pat_[A-Za-z0-9_]+|gho_[A-Za-z0-9]+|ghu_[A-Za-z0-9]+|ghs_[A-Za-z0-9]+|ghr_[A-Za-z0-9]+|xox[baprs]-[A-Za-z0-9-]+|AIza[0-9A-Za-z_-]{35}|cfut_[A-Za-z0-9]+|cfk_[A-Za-z0-9]+|cfat_[A-Za-z0-9]+|dsk_[A-Za-z0-9]+|Bearer\s+[A-Za-z0-9._\-]+|AKIA[0-9A-Z]{16}|ASIA[0-9A-Z]{16})/g;
 
 // Backstop for key formats the denylist doesn't know: a long run of
 // token-like characters with high Shannon entropy per character.
 // Random base62/base64 tokens sit at ~5.0+; git SHAs and UUIDs top out
 // near 4.0, English words and identifiers lower. Errs toward redacting:
 // a false positive costs a scrubbed hash in training data, a false
-// negative leaks a live credential.
-const TOKEN_RUN_RE = /[A-Za-z0-9_\-+~=.]{20,}/g;
+// negative leaks a live credential. The run alphabet includes "/"
+// because standard base64 tokens contain it; without it a single slash
+// splits a token into sub-20-char runs that evade the length floor.
+const TOKEN_RUN_RE = /[A-Za-z0-9_\-+~=.\\/]{20,}/g;
 const ENTROPY_THRESHOLD = 4.3;
 
 function shannonPerChar(s: string): number {
