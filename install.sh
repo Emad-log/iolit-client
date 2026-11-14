@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Iolit client installer. Usage: curl -fsSL iolit.dev/install | sh
+# Iolit client installer. Usage: curl -fsSL iolit.dev/install.sh | sh
 # Installs to ~/.iolit/bin, adds itself to PATH via shell rc.
 
 set -e
