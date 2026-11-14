@@ -1,5 +1,7 @@
 # Iolit Client
 
+[![CI](https://github.com/Emad-log/iolit-client/actions/workflows/ci.yml/badge.svg)](https://github.com/Emad-log/iolit-client/actions/workflows/ci.yml)
+
 Turn your AI coding sessions into income. You own your data, you approve what's sold.
 
 ## The promise
@@ -7,13 +9,13 @@ Turn your AI coding sessions into income. You own your data, you approve what's 
 **Audit the one call.**
 
 This client has exactly **one** way to reach the internet: `src/send.ts`.
-A CI check (`npm run check:single-send`) fails the build if a second
-network call ever appears. There is nothing else to audit.
+A CI check (`npm run check:single-send`, run on every push and pull
+request) fails the build if a second network call ever appears. There is nothing else to audit.
 
 ## Install
 
 ```sh
-curl -fsSL iolit.dev/install | sh
+curl -fsSL iolit.dev/install.sh | sh
 iolit
 ```
 
@@ -54,12 +56,39 @@ metadata, not session content.
 
 ## Build & test
 
+Node 22.13 or newer (the client uses `node:sqlite`). No runtime dependencies.
+
 ```sh
 npm install
-npm run build       # tsc, strict
-npm test            # payload schema tests
+npm run build              # tsc, strict
+npm test                   # unit tests, run against dist/
 npm run check:single-send  # proves 1 network call
+npm run check              # all three, as CI runs them
 ```
 
+## Layout
 
-MIT
+```
+src/
+  cli.ts             entry point: detect, estimate, ask, send
+  detect*.ts         read local Claude, Cursor, Codex and Hermes history
+  meta.ts, tiers.ts  build session metadata for each share tier
+  redact.ts          strip secrets and paths before anything is shown or sent
+  provenance.ts      bind a session to local commit SHAs
+  payload.ts         assemble the batch; types.ts is the wire schema
+  send.ts            the only network call
+  history.ts         local log of every batch sent
+  prompt.ts          terminal prompts
+  test/              unit tests
+scripts/check-network.js   fails if a second network call site appears
+install.sh                 the installer served at iolit.dev/install.sh
+```
+
+## Status
+
+Shelved. Iolit was a waitlist for an idea that did not take off. The code
+stays here, building and tested, for anyone who wants to read it.
+
+## License
+
+[MIT](LICENSE)
